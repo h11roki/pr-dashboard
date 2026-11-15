@@ -15,10 +15,7 @@ running() {
 }
 
 if [ "${1:-}" = "--restart" ]; then
-  pid="$(curl -sf --noproxy '*' --max-time 1 "$url/api/server" | jq -r '.pid | numbers' 2>/dev/null)" || pid=""
-  if [ -n "$pid" ]; then
-    kill "$pid" 2>/dev/null || true
-  fi
+  curl -sf --noproxy '*' --max-time 2 -X POST -o /dev/null "$url/api/shutdown" || true
   deadline=$((SECONDS + 5))
   while running && [ "$SECONDS" -lt "$deadline" ]; do
     sleep 0.25

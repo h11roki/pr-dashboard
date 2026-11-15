@@ -14,7 +14,7 @@ Claude Code が作った PR の判断材料を受け取り、手元のブラウ�
 - `server.py`: 報告の受け取り、検証、SQLite への保存、一覧と判断の API、画面の配信。実行時は Python の標準ライブラリだけを使う
 - `static/index.html`: 画面。HTML と素の JavaScript の 1 ファイル。サーバーは起動時に 1 回だけ読むので、書き換えたら起動し直す
 - `bin/toriage-report`: スキル `report` で Claude Code が呼ぶ送信スクリプト(プラグインが有効なあいだ Bash の PATH に入る)。Claude の判断材料(標準入力の JSON)に `gh pr view` の数字を足し、`server.py --check`(サーバーと同じ `parse_body` の検証)を通してから送る。つながらなければ `toriage-start` で起動して送り直し、届かなかったと分かるとき(curl の 6、7)だけ inbox に保存する(0006、0008)。終わり方は 0 が送ったか inbox に保存した、1 が理由を出して失敗、2 が使い方の誤り。`gh`、`jq`、`curl` が要る。送り先は `TORIAGE_URL` で変えられ、そのときは起動しない
-- `bin/toriage-start`: サーバーを `nohup` で裏に起動し、最大 10 秒つながるまで待つ。作業ディレクトリはデータの置き場所にし、`GH_TOKEN` と `GITHUB_TOKEN` は渡さない(0008)。起動できなければ `server.log` の場所を出して 1 で終わる。`--restart` は 8787 番で答えているサーバーに `GET /api/server` で番号を聞いて止め(置き場所や版によらない)、止められなければ 1 で終わる。`server.pid` は人が止めるときとテストの後始末に使う。SessionStart のフック(`hooks/hooks.json`、待ち時間はフックの 15 秒より短くする)、スキル `open`、送信スクリプトが呼ぶ
+- `bin/toriage-start`: サーバーを `nohup` で裏に起動し、最大 10 秒つながるまで待つ。作業ディレクトリはデータの置き場所にし、`GH_TOKEN` と `GITHUB_TOKEN` は渡さない(0008)。起動できなければ `server.log` の場所を出して 1 で終わる。`--restart` は 8787 番で答えているサーバーに `POST /api/shutdown` で止まってもらい(置き場所や版によらない)、止まらなければ 1 で終わる(0010)。`server.pid` は番号を知るためだけに残す。SessionStart のフック(`hooks/hooks.json`、待ち時間はフックの 15 秒より短くする)、スキル `open`、送信スクリプトが呼ぶ
 - `libexec/toriage-python`: 3.13 以上の `python3`、なければ uv の Python 3.13 で実行する
 - `libexec/toriage-home`: データの置き場所を出す。`server.py` の `data_home()` と同じ決まりで、テストで一致を確かめている
 - `skills/report`、`skills/open`: `/toriage:report`(判断材料の書き方と送り方)、`/toriage:open`(起動して開く。人が呼ぶときだけ)
@@ -33,6 +33,7 @@ Claude Code が作った PR の判断材料を受け取り、手元のブラウ�
 - 判断のボタン(レビュー依頼、差し戻し、保留)はサーバーから `gh` を `-R` 付きで呼び、失敗したら状態を変えない。未判断と保留のカードにだけ出す(0007)
 - Claude Code のプラグインとして配り、SessionStart のフックと送信スクリプトがサーバーを起動する。データはプラグインの外に置く(0008)
 - 名前は toriage(小文字)。リポジトリ、ディレクトリ、プラグイン、コマンド、データの場所、環境変数をそろえる。0001〜0008 の古い名前はこれで読み替える(0009)
+- 起動し直すときは、8787 番で答えているサーバーに `POST /api/shutdown` で自分で止まってもらう(0010)
 
 ## 進め方
 

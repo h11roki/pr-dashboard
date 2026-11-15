@@ -472,8 +472,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif url.path == "/api/prs":
             triages = self.server.store.list_triages()
             self._send_json(HTTPStatus.OK, [asdict(triage) for triage in triages])
-        elif url.path == "/api/server":
-            self._send_json(HTTPStatus.OK, {"pid": os.getpid()})
         else:
             self._reject(HTTPStatus.NOT_FOUND, "見つからない")
 
@@ -484,6 +482,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._reject(HTTPStatus.FORBIDDEN, "ほかのサイトからの要求は受け付けない")
         elif path == "/api/prs":
             self._receive_report()
+        elif path == "/api/shutdown":
+            self._send_json(HTTPStatus.OK, {})
+            self.server.shutdown()
         elif action:
             self._decide(int(action[1]), Action(action[2]))
         else:
@@ -573,13 +574,15 @@ def main() -> None:
     home = data_home()
     store = TriageStore(home / "prs.db")
     server = DashboardServer(PORT, store, ROOT / "static" / "index.html", run_gh)
-    (home / "server.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+    pid_file = home / "server.pid"
+    pid_file.write_text(f"{os.getpid()}\n", encoding="utf-8")
     imported = import_inbox(home / "inbox", store)
     if imported:
         print(f"inbox から {imported} 件取り込んだ")
     print(f"http://{HOST}:{PORT} で待ち受けている")
     with suppress(KeyboardInterrupt):
         server.serve_forever()
+    pid_file.unlink(missing_ok=True)
     server.server_close()
     store.close()
 

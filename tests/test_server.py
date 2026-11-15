@@ -1,11 +1,12 @@
 import json
-import os
 import socket
+import threading
+from collections.abc import Callable
 from http.client import HTTPConnection
 
 import pytest
 
-from server import HOST, MAX_BODY_BYTES, DashboardHandler, TriageStore
+from server import HOST, MAX_BODY_BYTES, ROOT, DashboardHandler, DashboardServer, TriageStore
 
 CLIENT_TIMEOUT_SECONDS = 5
 
@@ -143,11 +144,26 @@ def test_accepts_a_content_length_with_leading_zeros(port: int, report: dict[str
     assert status == 200
 
 
-def test_tells_which_process_is_serving(port: int) -> None:
-    status, body = send(port, "GET", "/api/server")
+def test_stops_serving_when_asked_to_shut_down(
+    store: TriageStore, recording_gh: Callable[[list[str], str], None]
+) -> None:
+    server = DashboardServer(0, store, ROOT / "static" / "index.html", recording_gh)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
 
+    status, _ = send(server.server_port, "POST", "/api/shutdown")
+
+    thread.join(timeout=CLIENT_TIMEOUT_SECONDS)
+    server.server_close()
     assert status == 200
-    assert json.loads(body) == {"pid": os.getpid()}
+    assert not thread.is_alive()
+
+
+def test_refuses_a_shutdown_from_another_site(port: int) -> None:
+    status, _ = send(port, "POST", "/api/shutdown", headers={"Origin": "https://example.com"})
+
+    assert status == 403
+    assert send(port, "GET", "/api/prs")[0] == 200
 
 
 def test_unknown_paths_are_not_found(port: int) -> None:
