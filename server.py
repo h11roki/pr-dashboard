@@ -1,0 +1,357 @@
+import json
+import re
+import sqlite3
+import sys
+import threading
+from contextlib import suppress
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import urlsplit
+
+ROOT = Path(__file__).resolve().parent
+HOST = "127.0.0.1"
+PORT = 8787
+MAX_BODY_BYTES = 64 * 1024
+REQUEST_TIMEOUT_SECONDS = 10
+MAX_SUMMARY_LINES = 3
+MAX_INTEGER = 2**31 - 1
+REPO_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/(?!\.{1,2}$)[A-Za-z0-9._][A-Za-z0-9._-]*")
+REVIEWER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)?")
+RISKS = ("low", "medium", "high")
+TEST_STATUSES = ("passed", "failed", "not_run")
+CONTENT_SECURITY_POLICY = "; ".join(
+    [
+        "default-src 'none'",
+        "script-src 'unsafe-inline'",
+        "style-src 'unsafe-inline'",
+        "connect-src 'self'",
+        "frame-ancestors 'none'",
+        "base-uri 'none'",
+        "form-action 'none'",
+    ]
+)
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS prs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    payload TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'requested', 'returned', 'on_hold')),
+    note TEXT,
+    received_at TEXT NOT NULL,
+    decided_at TEXT,
+    UNIQUE (repo, number)
+)
+"""
+
+UPSERT_REPORT = """
+INSERT INTO prs (repo, number, payload, received_at) VALUES (?, ?, ?, ?)
+ON CONFLICT (repo, number) DO UPDATE SET
+    payload = excluded.payload,
+    received_at = excluded.received_at,
+    status = CASE status WHEN 'returned' THEN 'pending' ELSE status END,
+    note = CASE status WHEN 'returned' THEN NULL ELSE note END,
+    decided_at = CASE status WHEN 'returned' THEN NULL ELSE decided_at END
+WHERE excluded.received_at > prs.received_at
+"""
+
+SELECT_TRIAGES = """
+SELECT id, status, note, received_at, decided_at, payload FROM prs
+ORDER BY received_at DESC, id DESC
+"""
+
+
+class InvalidReport(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class Changes:
+    files: int
+    additions: int
+    deletions: int
+
+
+@dataclass(frozen=True)
+class TestResult:
+    status: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class Report:
+    repo: str
+    number: int
+    url: str
+    title: str
+    branch: str
+    changes: Changes
+    summary: tuple[str, ...]
+    why: str
+    risk: str
+    risk_reason: str
+    concerns: tuple[str, ...]
+    tests: TestResult
+    suggested_reviewers: tuple[str, ...]
+    artifact_url: str | None
+
+
+@dataclass(frozen=True)
+class Triage:
+    id: int
+    status: str
+    note: str | None
+    received_at: str
+    decided_at: str | None
+    report: object
+
+
+def _field[T](data: dict[str, object], key: str, kind: type[T]) -> T:
+    value = data.get(key)
+    if isinstance(value, bool) or not isinstance(value, kind):
+        raise InvalidReport(f"{key} は {kind.__name__} で指定する")
+    return value
+
+
+def _count(data: dict[str, object], key: str) -> int:
+    value = _field(data, key, int)
+    if not 0 <= value <= MAX_INTEGER:
+        raise InvalidReport(f"{key} は 0〜{MAX_INTEGER} で指定する")
+    return value
+
+
+def _choice(data: dict[str, object], key: str, choices: tuple[str, ...]) -> str:
+    value = _field(data, key, str)
+    if value not in choices:
+        raise InvalidReport(f"{key} は {' / '.join(choices)} のどれかで指定する")
+    return value
+
+
+def _text(data: dict[str, object], key: str) -> str:
+    value = _field(data, key, str)
+    if not value.strip():
+        raise InvalidReport(f"{key} を空にしない")
+    return value
+
+
+def _texts(data: dict[str, object], key: str) -> tuple[str, ...]:
+    value = data.get(key)
+    if not isinstance(value, list) or not all(
+        isinstance(item, str) and item.strip() for item in value
+    ):
+        raise InvalidReport(f"{key} は空でない文字列の配列で指定する")
+    return tuple(value)
+
+
+def _https_url(data: dict[str, object], key: str) -> str:
+    value = _field(data, key, str)
+    if not value.startswith("https://"):
+        raise InvalidReport(f"{key} は https:// で始まる URL で指定する")
+    return value
+
+
+def parse_report(raw: object) -> Report:
+    if not isinstance(raw, dict):
+        raise InvalidReport("報告は JSON のオブジェクトで送る")
+    try:
+        json.dumps(raw, ensure_ascii=False).encode()
+    except UnicodeEncodeError as error:
+        raise InvalidReport("UTF-8 で表せない文字を含めない") from error
+    repo = _field(raw, "repo", str)
+    if not REPO_PATTERN.fullmatch(repo):
+        raise InvalidReport("repo は owner/name の形で指定する")
+    number = _field(raw, "number", int)
+    if not 1 <= number <= MAX_INTEGER:
+        raise InvalidReport(f"number は 1〜{MAX_INTEGER} で指定する")
+    url = _field(raw, "url", str)
+    if url != f"https://github.com/{repo}/pull/{number}":
+        raise InvalidReport(f"url は https://github.com/{repo}/pull/{number} にする")
+    summary = _texts(raw, "summary")
+    if not 1 <= len(summary) <= MAX_SUMMARY_LINES:
+        raise InvalidReport(f"summary は 1〜{MAX_SUMMARY_LINES} 行で書く")
+    reviewers = _texts(raw, "suggested_reviewers")
+    if not all(REVIEWER_PATTERN.fullmatch(reviewer) for reviewer in reviewers):
+        raise InvalidReport("suggested_reviewers は GitHub のユーザー名か org/team で指定する")
+    changes = _field(raw, "changes", dict)
+    tests = _field(raw, "tests", dict)
+    return Report(
+        repo=repo,
+        number=number,
+        url=url,
+        title=_text(raw, "title"),
+        branch=_text(raw, "branch"),
+        changes=Changes(
+            files=_count(changes, "files"),
+            additions=_count(changes, "additions"),
+            deletions=_count(changes, "deletions"),
+        ),
+        summary=summary,
+        why=_text(raw, "why"),
+        risk=_choice(raw, "risk", RISKS),
+        risk_reason=_text(raw, "risk_reason"),
+        concerns=_texts(raw, "concerns"),
+        tests=TestResult(
+            status=_choice(tests, "status", TEST_STATUSES),
+            detail=_text(tests, "detail"),
+        ),
+        suggested_reviewers=reviewers,
+        artifact_url=None if raw.get("artifact_url") is None else _https_url(raw, "artifact_url"),
+    )
+
+
+class TriageStore:
+    def __init__(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._connection = sqlite3.connect(path, check_same_thread=False)
+        self._connection.row_factory = sqlite3.Row
+        self._connection.execute(SCHEMA)
+        self._lock = threading.Lock()
+
+    def save(self, report: Report, received_at: datetime) -> bool:
+        payload = json.dumps(asdict(report), ensure_ascii=False)
+        received = received_at.astimezone(UTC).isoformat(timespec="milliseconds")
+        with self._lock, self._connection:
+            cursor = self._connection.execute(
+                UPSERT_REPORT, (report.repo, report.number, payload, received)
+            )
+        return cursor.rowcount == 1
+
+    def list_triages(self) -> list[Triage]:
+        with self._lock:
+            rows = self._connection.execute(SELECT_TRIAGES).fetchall()
+        return [
+            Triage(
+                id=row["id"],
+                status=row["status"],
+                note=row["note"],
+                received_at=row["received_at"],
+                decided_at=row["decided_at"],
+                report=json.loads(row["payload"]),
+            )
+            for row in rows
+        ]
+
+    def close(self) -> None:
+        self._connection.close()
+
+
+def import_inbox(inbox: Path, store: TriageStore) -> int:
+    imported = 0
+    for path in sorted(inbox.glob("*.json")):
+        try:
+            written = path.stat()
+            if written.st_size > MAX_BODY_BYTES:
+                raise InvalidReport(f"{MAX_BODY_BYTES} バイトを超える")
+            report = parse_report(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError, RecursionError) as error:
+            print(f"{path} を取り込めませんでした: {error}", file=sys.stderr)
+            continue
+        if store.save(report, datetime.fromtimestamp(written.st_mtime, UTC)):
+            imported += 1
+        path.unlink()
+    return imported
+
+
+class DashboardServer(ThreadingHTTPServer):
+    def __init__(self, port: int, store: TriageStore, page: Path) -> None:
+        super().__init__((HOST, port), DashboardHandler)
+        self.store = store
+        self.page = page.read_bytes()
+        self.allowed_hosts = frozenset(
+            {f"{HOST}:{self.server_port}", f"localhost:{self.server_port}"}
+        )
+        self.allowed_origins = frozenset(f"http://{host}" for host in self.allowed_hosts)
+
+
+class DashboardHandler(BaseHTTPRequestHandler):
+    server: DashboardServer
+    timeout = REQUEST_TIMEOUT_SECONDS
+
+    def do_GET(self) -> None:
+        url = urlsplit(self.path)
+        if not self._is_local_request():
+            self._reject(HTTPStatus.FORBIDDEN, "ほかのサイトからの要求は受け付けない")
+        elif url.path == "/":
+            self._send(HTTPStatus.OK, "text/html; charset=utf-8", self.server.page)
+        elif url.path == "/api/prs":
+            triages = self.server.store.list_triages()
+            self._send_json(HTTPStatus.OK, [asdict(triage) for triage in triages])
+        else:
+            self._reject(HTTPStatus.NOT_FOUND, "見つからない")
+
+    def do_POST(self) -> None:
+        if not self._is_local_request():
+            self._reject(HTTPStatus.FORBIDDEN, "ほかのサイトからの要求は受け付けない")
+        elif urlsplit(self.path).path == "/api/prs":
+            self._receive_report()
+        else:
+            self._reject(HTTPStatus.NOT_FOUND, "見つからない")
+
+    def _is_local_request(self) -> bool:
+        origin = self.headers.get("Origin")
+        return self.headers.get("Host") in self.server.allowed_hosts and (
+            origin is None or origin in self.server.allowed_origins
+        )
+
+    def _receive_report(self) -> None:
+        length = self.headers.get("Content-Length", "")
+        if not (length.isascii() and length.isdigit()):
+            self._reject(HTTPStatus.LENGTH_REQUIRED, "Content-Length を付ける")
+            return
+        digits = length.lstrip("0") or "0"
+        if len(digits) > len(str(MAX_BODY_BYTES)) or int(digits) > MAX_BODY_BYTES:
+            self._reject(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, f"本文は {MAX_BODY_BYTES} バイトまで")
+            return
+        try:
+            body = self.rfile.read(int(digits))
+        except TimeoutError:
+            self._reject(HTTPStatus.REQUEST_TIMEOUT, "本文が届かない")
+            return
+        if self.headers.get_content_type() != "application/json":
+            self._reject(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "本文は application/json で送る")
+            return
+        try:
+            report = parse_report(json.loads(body))
+        except (ValueError, RecursionError) as error:
+            self._reject(HTTPStatus.BAD_REQUEST, str(error))
+            return
+        saved = self.server.store.save(report, datetime.now(UTC))
+        self._send_json(HTTPStatus.OK, {"saved": saved})
+
+    def _reject(self, status: HTTPStatus, message: str) -> None:
+        self._send_json(status, {"error": message})
+
+    def _send_json(self, status: HTTPStatus, value: object) -> None:
+        body = json.dumps(value, ensure_ascii=False).encode()
+        self._send(status, "application/json; charset=utf-8", body)
+
+    def _send(self, status: HTTPStatus, content_type: str, body: bytes) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def main() -> None:
+    store = TriageStore(ROOT / "data" / "prs.db")
+    imported = import_inbox(ROOT / "inbox", store)
+    if imported:
+        print(f"inbox から {imported} 件取り込んだ")
+    server = DashboardServer(PORT, store, ROOT / "static" / "index.html")
+    print(f"http://{HOST}:{PORT} で待ち受けている")
+    with suppress(KeyboardInterrupt):
+        server.serve_forever()
+    server.server_close()
+    store.close()
+
+
+if __name__ == "__main__":
+    main()
