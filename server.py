@@ -31,6 +31,21 @@ TEST_STATUSES = ("passed", "failed", "not_run")
 ACTION_PATH = re.compile(r"/api/prs/([0-9]{1,10})/(request-review|return|hold)")
 MAX_REASON_LENGTH = 2000
 GH_TIMEOUT_SECONDS = 30
+INHERITED_SESSION_VARIABLES = frozenset(
+    {
+        "CLAUDECODE",
+        "CLAUDE_AGENT_SDK_VERSION",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_EXECPATH",
+        "CLAUDE_CODE_MESSAGING_SOCKET",
+        "CLAUDE_CODE_MESSAGING_TOKEN",
+        "CLAUDE_CODE_SESSION_ATTENDED",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_EFFORT",
+        "CLAUDE_PID",
+    }
+)
 RETURN_PROMPT = """toriage で {url} が差し戻されました。
 
 理由:
@@ -354,7 +369,10 @@ class TriageStore:
         report = json.loads(row["payload"])
         stored = report.get("suggested_reviewers") if isinstance(report, dict) else None
         stored_session = report.get("session") if isinstance(report, dict) else None
-        session = _session(stored_session) if isinstance(stored_session, dict) else None
+        try:
+            session = _session(stored_session) if isinstance(stored_session, dict) else None
+        except InvalidReport:
+            session = None
         return Triage(
             id=row["id"],
             repo=row["repo"],
@@ -415,37 +433,61 @@ def run_gh(arguments: list[str], stdin: str) -> None:
 
 
 def resume_in_background(logs: Path) -> ResumeSession:
+    running: set[str] = set()
+    lock = threading.Lock()
+
+    def wait_and_record(session: Session, process: subprocess.Popen[bytes], log: Path) -> None:
+        code = process.wait()
+        with lock:
+            running.discard(session.id)
+        with log.open("a", encoding="utf-8") as output:
+            output.write(f"{_now()} に終わった(終了コード {code})\n")
+
     def resume(session: Session, prompt: str) -> None:
         if not Path(session.workdir).is_dir():
             raise ResumeFailed(f"PR を作った場所 {session.workdir} がもうない")
-        logs.mkdir(parents=True, exist_ok=True)
-        try:
-            with (logs / f"{session.id}.log").open("a", encoding="utf-8") as log:
-                log.write(f"{datetime.now(UTC).isoformat(timespec='seconds')} に差し戻した\n")
-                log.flush()
-                process = subprocess.Popen(
-                    [
-                        "claude",
-                        "-p",
-                        "--resume",
-                        session.id,
-                        "--permission-mode",
-                        "auto",
-                        "--permission-prompts",
-                        "none",
-                        prompt,
-                    ],
-                    cwd=session.workdir,
-                    stdin=subprocess.DEVNULL,
-                    stdout=log,
-                    stderr=subprocess.STDOUT,
-                    start_new_session=True,
-                )
-        except OSError as error:
-            raise ResumeFailed(f"Claude Code を起動できなかった: {error}") from error
-        threading.Thread(target=process.wait, daemon=True).start()
+        log = logs / f"{session.id}.log"
+        with lock:
+            if session.id in running:
+                raise ResumeFailed("この会話は前の差し戻しをまだ直している。終わってから差し戻す")
+            try:
+                logs.mkdir(parents=True, exist_ok=True)
+                with log.open("a", encoding="utf-8") as output:
+                    output.write(f"{_now()} に差し戻した\n")
+                    output.flush()
+                    process = subprocess.Popen(
+                        [
+                            "claude",
+                            "-p",
+                            "--resume",
+                            session.id,
+                            "--permission-mode",
+                            "auto",
+                            "--permission-prompts",
+                            "none",
+                            prompt,
+                        ],
+                        cwd=session.workdir,
+                        env={
+                            name: value
+                            for name, value in os.environ.items()
+                            if name not in INHERITED_SESSION_VARIABLES
+                        },
+                        stdin=subprocess.DEVNULL,
+                        stdout=output,
+                        stderr=subprocess.STDOUT,
+                        start_new_session=True,
+                    )
+            except OSError as error:
+                raise ResumeFailed(f"Claude Code を起動できなかった: {error}") from error
+            running.add(session.id)
+        threading.Thread(target=wait_and_record, args=(session, process, log), daemon=True).start()
 
     return resume
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def parse_decision_request(body: bytes) -> DecisionRequest:
@@ -491,10 +533,7 @@ def decide(
         case Action.RETURN:
             if not request.reason.strip() or len(request.reason) > MAX_REASON_LENGTH:
                 raise InvalidReason(f"差し戻す理由は 1〜{MAX_REASON_LENGTH} 字で書く")
-            if triage.session is None:
-                raise AlreadyDecided(
-                    "この報告には PR を作ったセッションが付いていないので差し戻せない"
-                )
+            assert triage.session is not None
             pr_url = f"https://github.com/{triage.repo}/pull/{triage.number}"
             resume(triage.session, RETURN_PROMPT.format(url=pr_url, reason=request.reason))
             status, note = "returned", request.reason

@@ -3,7 +3,7 @@ import sqlite3
 from collections.abc import Callable
 from contextlib import closing
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from http.client import HTTPConnection
 from pathlib import Path
 
@@ -24,7 +24,7 @@ from server import (
 
 GhCalls = list[tuple[list[str], str]]
 Resumed = list[tuple[Session, str]]
-SESSION = Session(id="07805e44-cede-43f0-b5dd-4a9ae6541ad5", workdir="/work/web")
+SESSION = Session(id="0f8fad5b-d9cb-469f-a165-70867728950e", workdir="/work/web")
 
 
 def from_a_session(report: dict[str, object]) -> dict[str, object]:
@@ -165,6 +165,19 @@ def test_a_report_without_its_session_cannot_be_returned(
     assert status_of(store, triage) == "pending"
 
 
+def test_a_stored_session_that_no_longer_passes_is_left_out(
+    tmp_path: Path, store: TriageStore, report: dict[str, object]
+) -> None:
+    save_pending(store, from_a_session(report))
+    with closing(sqlite3.connect(tmp_path / "prs.db")) as old, old:
+        old.execute("UPDATE prs SET payload = json_set(payload, '$.session.id', '-rf')")
+
+    [triage] = store.list_triages()
+
+    assert triage.session is None
+    assert Action.RETURN not in triage.actions
+
+
 def test_a_session_that_cannot_be_resumed_leaves_the_status_alone(
     port: int, store: TriageStore, report: dict[str, object], resume_failures: list[str]
 ) -> None:
@@ -294,7 +307,10 @@ def test_a_report_that_arrives_while_returning_is_recorded_with_a_warning(
     triage = save_pending(store, from_a_session(report))
 
     def resume_while_a_new_report_arrives(session: Session, prompt: str) -> None:
-        store.save(parse_report(from_a_session(report) | {"title": "直した題"}), datetime.now(UTC))
+        store.save(
+            parse_report(from_a_session(report) | {"title": "直した題"}),
+            datetime.now(UTC) + timedelta(seconds=1),
+        )
 
     resume: ResumeSession = resume_while_a_new_report_arrives
     decision = decide(
