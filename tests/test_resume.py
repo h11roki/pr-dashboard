@@ -103,20 +103,36 @@ def test_resumes_the_session_in_its_workdir_with_auto_mode(
     assert "直して送り直した" in log_of(logs)
 
 
-def test_leaves_out_the_report_command_the_server_was_started_with(
+def test_leaves_out_the_plugin_bin_the_server_was_started_with(
     tmp_path: Path, fake_claude: FakeClaude, workdir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    older_plugin = tmp_path / "plugins" / "toriage" / "0.1.0" / "bin"
-    older_plugin.mkdir(parents=True)
-    (older_plugin / "toriage-report").write_text("#!/bin/sh\n", encoding="utf-8")
+    older_plugin = tmp_path / "plugins" / "toriage" / "0.1.0"
+    (older_plugin / ".claude-plugin").mkdir(parents=True)
+    (older_plugin / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
+    (older_plugin / "bin").mkdir()
+    (older_plugin / "bin" / "toriage-report").write_text("#!/bin/sh\n", encoding="utf-8")
     path_without_plugin = os.environ["PATH"]
-    monkeypatch.setenv("PATH", f"{older_plugin}{os.pathsep}{path_without_plugin}")
+    monkeypatch.setenv("PATH", f"{older_plugin / 'bin'}{os.pathsep}{path_without_plugin}")
 
     resume_in_background(tmp_path / "returns")(
         Session(id=SESSION_ID, workdir=str(workdir)), "直してください"
     )
 
     assert fake_claude.call()["path"] == path_without_plugin
+    fake_claude.finish()
+
+
+def test_keeps_a_directory_that_holds_the_report_command_outside_a_plugin(
+    tmp_path: Path, fake_claude: FakeClaude, workdir: Path
+) -> None:
+    shared_with_claude = Path(os.environ["PATH"].split(os.pathsep)[0])
+    (shared_with_claude / "toriage-report").write_text("#!/bin/sh\n", encoding="utf-8")
+
+    resume_in_background(tmp_path / "returns")(
+        Session(id=SESSION_ID, workdir=str(workdir)), "直してください"
+    )
+
+    assert fake_claude.call()["path"] == os.environ["PATH"]
     fake_claude.finish()
 
 

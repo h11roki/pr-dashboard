@@ -32,6 +32,7 @@ ACTION_PATH = re.compile(r"/api/prs/([0-9]{1,10})/(request-review|return|hold)")
 MAX_REASON_LENGTH = 2000
 GH_TIMEOUT_SECONDS = 30
 REPORT_COMMAND = "toriage-report"
+PLUGIN_MANIFEST = Path(".claude-plugin") / "plugin.json"
 INHERITED_SESSION_VARIABLES = frozenset(
     {
         "CLAUDECODE",
@@ -507,7 +508,10 @@ def _resume_environment() -> dict[str, str]:
         environment["PATH"] = os.pathsep.join(
             directory
             for directory in environment["PATH"].split(os.pathsep)
-            if not (Path(directory) / REPORT_COMMAND).is_file()
+            if not (
+                (Path(directory) / REPORT_COMMAND).is_file()
+                and (Path(directory).parent / PLUGIN_MANIFEST).is_file()
+            )
         )
     return environment
 
