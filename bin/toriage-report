@@ -32,7 +32,12 @@ facts="$(gh pr view "$1" --json number,url,title,headRefName,additions,deletions
 body="$(jq -c --argjson facts "$facts" \
   --arg session_id "${CLAUDE_CODE_SESSION_ID:-}" --arg workdir "$PWD" '
   . + {
-    session: (if $session_id == "" then null else {id: $session_id, workdir: $workdir} end),
+    session: (
+      if $session_id | test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+      then {id: $session_id, workdir: $workdir}
+      else null
+      end
+    ),
     repo: ($facts.url | split("/") | "\(.[3])/\(.[4])"),
     number: $facts.number,
     url: $facts.url,

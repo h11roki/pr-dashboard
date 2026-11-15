@@ -10,7 +10,7 @@ from server import HOST, ROOT, Session, TriageStore
 
 SCRIPT = ROOT / "bin" / "toriage-report"
 REFUSED = f"http://{HOST}:1"
-SESSION_ID = "07805e44-cede-43f0-b5dd-4a9ae6541ad5"
+SESSION_ID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 FACTS_FROM_GH = ("repo", "number", "url", "title", "branch", "changes")
 GH_PR_VIEW = {
     "number": 128,
@@ -102,6 +102,23 @@ def test_attaches_the_claude_code_session_it_runs_in(
     assert result.returncode == 0, result.stderr
     [triage] = store.list_triages()
     assert triage.session == Session(id=SESSION_ID, workdir=str(workdir.resolve()))
+
+
+def test_sends_without_a_session_when_the_session_id_is_not_a_uuid(
+    tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
+) -> None:
+    result = run_script(
+        fake_gh,
+        json.dumps(judgment_of(report)),
+        f"http://{HOST}:{port}",
+        tmp_path / "home",
+        "128",
+        session_id="--dangerously-skip-permissions",
+    )
+
+    assert result.returncode == 0, result.stderr
+    [triage] = store.list_triages()
+    assert triage.session is None
 
 
 def test_does_not_take_the_session_from_the_judgment(

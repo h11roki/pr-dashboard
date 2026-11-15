@@ -6,7 +6,7 @@ import pytest
 
 from server import MAX_BODY_BYTES, ROOT, InvalidReport, Session, parse_body, parse_report
 
-SESSION_ID = "07805e44-cede-43f0-b5dd-4a9ae6541ad5"
+SESSION_ID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 
 
 def test_accepts_the_example_from_the_design(report: dict[str, object]) -> None:
