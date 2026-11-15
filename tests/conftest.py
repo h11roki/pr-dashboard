@@ -9,7 +9,17 @@ from pathlib import Path
 
 import pytest
 
-from server import HOST, PORT, ROOT, DashboardServer, GhFailed, TriageStore
+from server import (
+    HOST,
+    PORT,
+    ROOT,
+    DashboardServer,
+    DecisionError,
+    GhFailed,
+    ResumeSession,
+    Session,
+    TriageStore,
+)
 
 
 def dashboard_is_listening() -> bool:
@@ -51,6 +61,7 @@ def report() -> dict[str, object]:
         "tests": {"status": "passed", "detail": "unit 42件、e2e 3件"},
         "suggested_reviewers": [],
         "artifact_url": "https://claude.ai/artifact/example",
+        "session": None,
     }
 
 
@@ -84,9 +95,36 @@ def recording_gh(
 
 
 @pytest.fixture
-def port(store: TriageStore, recording_gh: Callable[[list[str], str], None]) -> Iterator[int]:
+def resumed() -> list[tuple[Session, str]]:
+    return []
 
-    server = DashboardServer(0, store, ROOT / "static" / "index.html", recording_gh)
+
+@pytest.fixture
+def resume_failures() -> list[DecisionError]:
+    return []
+
+
+@pytest.fixture
+def recording_resume(
+    resumed: list[tuple[Session, str]], resume_failures: list[DecisionError]
+) -> ResumeSession:
+    def resume(session: Session, prompt: str) -> None:
+        if resume_failures:
+            raise resume_failures[0]
+        resumed.append((session, prompt))
+
+    return resume
+
+
+@pytest.fixture
+def port(
+    store: TriageStore,
+    recording_gh: Callable[[list[str], str], None],
+    recording_resume: ResumeSession,
+) -> Iterator[int]:
+    server = DashboardServer(
+        0, store, ROOT / "static" / "index.html", recording_gh, recording_resume
+    )
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
     yield server.server_port

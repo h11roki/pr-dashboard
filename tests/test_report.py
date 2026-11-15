@@ -4,7 +4,9 @@ import sys
 
 import pytest
 
-from server import MAX_BODY_BYTES, ROOT, InvalidReport, parse_body, parse_report
+from server import MAX_BODY_BYTES, ROOT, InvalidReport, Session, parse_body, parse_report
+
+SESSION_ID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 
 
 def test_accepts_the_example_from_the_design(report: dict[str, object]) -> None:
@@ -19,6 +21,31 @@ def test_artifact_url_may_be_left_out(report: dict[str, object]) -> None:
     del report["artifact_url"]
 
     assert parse_report(report).artifact_url is None
+
+
+def test_keeps_the_session_that_made_the_pr(report: dict[str, object]) -> None:
+    report["session"] = {"id": SESSION_ID, "workdir": "/work/web"}
+
+    assert parse_report(report).session == Session(id=SESSION_ID, workdir="/work/web")
+
+
+@pytest.mark.parametrize(
+    "session",
+    [
+        SESSION_ID,
+        {"workdir": "/work/web"},
+        {"id": "--dangerously-skip-permissions", "workdir": "/work/web"},
+        {"id": SESSION_ID.upper(), "workdir": "/work/web"},
+        {"id": SESSION_ID, "workdir": "work/web"},
+        {"id": SESSION_ID, "workdir": "/work/\0web"},
+    ],
+)
+def test_keeps_the_report_but_not_a_session_that_cannot_be_resumed(
+    report: dict[str, object], session: object
+) -> None:
+    report["session"] = session
+
+    assert parse_report(report).session is None
 
 
 def test_rejects_a_body_that_is_not_an_object() -> None:

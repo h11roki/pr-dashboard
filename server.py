@@ -25,11 +25,37 @@ MAX_SUMMARY_LINES = 3
 MAX_INTEGER = 2**31 - 1
 REPO_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/(?!\.{1,2}$)[A-Za-z0-9._][A-Za-z0-9._-]*")
 REVIEWER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)?")
+SESSION_ID_PATTERN = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 RISKS = ("low", "medium", "high")
 TEST_STATUSES = ("passed", "failed", "not_run")
 ACTION_PATH = re.compile(r"/api/prs/([0-9]{1,10})/(request-review|return|hold)")
 MAX_REASON_LENGTH = 2000
 GH_TIMEOUT_SECONDS = 30
+INHERITED_SESSION_VARIABLES = frozenset(
+    {
+        "CLAUDECODE",
+        "CLAUDE_AGENT_SDK_VERSION",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_EXECPATH",
+        "CLAUDE_CODE_MESSAGING_SOCKET",
+        "CLAUDE_CODE_MESSAGING_TOKEN",
+        "CLAUDE_CODE_SESSION_ATTENDED",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_EFFORT",
+        "CLAUDE_ENV_FILE",
+        "CLAUDE_PID",
+        "CLAUDE_PLUGIN_DATA",
+        "CLAUDE_PLUGIN_ROOT",
+        "CLAUDE_PROJECT_DIR",
+    }
+)
+RETURN_PROMPT = """toriage で {url} が差し戻されました。
+
+理由:
+{reason}
+
+この PR を直して push し、/toriage:report で判断材料を送り直してください。"""
 CONTENT_SECURITY_POLICY = "; ".join(
     [
         "default-src 'none'",
@@ -97,6 +123,7 @@ class Action(StrEnum):
 ALLOWED_ACTIONS: dict[str, tuple[Action, ...]] = {
     "pending": (Action.REQUEST_REVIEW, Action.RETURN, Action.HOLD),
     "on_hold": (Action.REQUEST_REVIEW, Action.RETURN),
+    "returned": (Action.RETURN,),
 }
 
 
@@ -128,6 +155,14 @@ class GhFailed(DecisionError):
     status = HTTPStatus.BAD_GATEWAY
 
 
+class ResumeFailed(DecisionError):
+    status = HTTPStatus.BAD_GATEWAY
+
+
+class SessionBusy(DecisionError):
+    status = HTTPStatus.CONFLICT
+
+
 @dataclass(frozen=True)
 class Decision:
     status: str
@@ -154,6 +189,15 @@ class TestResult:
 
 
 @dataclass(frozen=True)
+class Session:
+    id: str
+    workdir: str
+
+
+ResumeSession = Callable[[Session, str], None]
+
+
+@dataclass(frozen=True)
 class Report:
     repo: str
     number: int
@@ -169,6 +213,7 @@ class Report:
     tests: TestResult
     suggested_reviewers: tuple[str, ...]
     artifact_url: str | None
+    session: Session | None
 
 
 @dataclass(frozen=True)
@@ -182,6 +227,7 @@ class Triage:
     decided_at: str | None
     report: object
     reviewers: tuple[str, ...]
+    session: Session | None
     actions: tuple[Action, ...]
 
 
@@ -229,6 +275,21 @@ def _https_url(data: dict[str, object], key: str) -> str:
     return value
 
 
+def _session_or_none(value: object) -> Session | None:
+    if not isinstance(value, dict):
+        return None
+    session_id, workdir = value.get("id"), value.get("workdir")
+    if not isinstance(session_id, str) or not SESSION_ID_PATTERN.fullmatch(session_id):
+        return None
+    if not isinstance(workdir, str) or not Path(workdir).is_absolute() or "\0" in workdir:
+        return None
+    return Session(id=session_id, workdir=workdir)
+
+
+def pull_request_url(repo: str, number: int) -> str:
+    return f"https://github.com/{repo}/pull/{number}"
+
+
 def parse_report(raw: object) -> Report:
     if not isinstance(raw, dict):
         raise InvalidReport("報告は JSON のオブジェクトで送る")
@@ -243,8 +304,8 @@ def parse_report(raw: object) -> Report:
     if not 1 <= number <= MAX_INTEGER:
         raise InvalidReport(f"number は 1〜{MAX_INTEGER} で指定する")
     url = _field(raw, "url", str)
-    if url != f"https://github.com/{repo}/pull/{number}":
-        raise InvalidReport(f"url は https://github.com/{repo}/pull/{number} にする")
+    if url != pull_request_url(repo, number):
+        raise InvalidReport(f"url は {pull_request_url(repo, number)} にする")
     summary = _texts(raw, "summary")
     if not 1 <= len(summary) <= MAX_SUMMARY_LINES:
         raise InvalidReport(f"summary は 1〜{MAX_SUMMARY_LINES} 行で書く")
@@ -275,6 +336,7 @@ def parse_report(raw: object) -> Report:
         ),
         suggested_reviewers=reviewers,
         artifact_url=None if raw.get("artifact_url") is None else _https_url(raw, "artifact_url"),
+        session=_session_or_none(raw.get("session")),
     )
 
 
@@ -320,6 +382,7 @@ class TriageStore:
     def _triage(row: sqlite3.Row) -> Triage:
         report = json.loads(row["payload"])
         stored = report.get("suggested_reviewers") if isinstance(report, dict) else None
+        session = _session_or_none(report.get("session") if isinstance(report, dict) else None)
         return Triage(
             id=row["id"],
             repo=row["repo"],
@@ -334,7 +397,12 @@ class TriageStore:
                 for name in (stored if isinstance(stored, list) else [])
                 if isinstance(name, str) and REVIEWER_PATTERN.fullmatch(name)
             ),
-            actions=ALLOWED_ACTIONS.get(row["status"], ()),
+            session=session,
+            actions=tuple(
+                action
+                for action in ALLOWED_ACTIONS.get(row["status"], ())
+                if action is not Action.RETURN or session is not None
+            ),
         )
 
     def close(self) -> None:
@@ -374,6 +442,84 @@ def run_gh(arguments: list[str], stdin: str) -> None:
         raise GhFailed(completed.stderr.strip() or f"gh が {completed.returncode} で終わった")
 
 
+def resume_in_background(logs: Path) -> ResumeSession:
+    lock = threading.Lock()
+
+    def wait_and_record(process: subprocess.Popen[bytes], log: Path, marker: Path) -> None:
+        code = process.wait()
+        with log.open("a", encoding="utf-8") as output:
+            output.write(f"{_now()} に終わった(終了コード {code})\n")
+        with lock, suppress(OSError):
+            if marker.read_text(encoding="utf-8").strip() == str(process.pid):
+                marker.unlink()
+
+    def resume(session: Session, prompt: str) -> None:
+        if not Path(session.workdir).is_dir():
+            raise ResumeFailed(f"PR を作った場所 {session.workdir} がもうない")
+        log = logs / f"{session.id}.log"
+        marker = logs / f"{session.id}.pid"
+        with lock:
+            if _still_resuming(marker, session):
+                raise SessionBusy("この会話は前の差し戻しをまだ直している。終わってから差し戻す")
+            try:
+                logs.mkdir(parents=True, exist_ok=True)
+                with log.open("a", encoding="utf-8") as output:
+                    output.write(f"{_now()} に差し戻した\n")
+                    output.flush()
+                    process = subprocess.Popen(
+                        [
+                            "claude",
+                            "-p",
+                            "--resume",
+                            session.id,
+                            "--permission-mode",
+                            "auto",
+                            "--permission-prompts",
+                            "none",
+                            prompt,
+                        ],
+                        cwd=session.workdir,
+                        env={
+                            name: value
+                            for name, value in os.environ.items()
+                            if name not in INHERITED_SESSION_VARIABLES
+                        },
+                        stdin=subprocess.DEVNULL,
+                        stdout=output,
+                        stderr=subprocess.STDOUT,
+                        start_new_session=True,
+                    )
+            except OSError as error:
+                raise ResumeFailed(f"Claude Code を起動できなかった: {error}") from error
+            try:
+                marker.write_text(f"{process.pid}\n", encoding="utf-8")
+            except OSError as error:
+                process.kill()
+                process.wait()
+                raise ResumeFailed(f"再開したことを書き残せなかったので止めた: {error}") from error
+        threading.Thread(target=wait_and_record, args=(process, log, marker), daemon=True).start()
+
+    return resume
+
+
+def _still_resuming(marker: Path, session: Session) -> bool:
+    try:
+        pid = int(marker.read_text(encoding="utf-8"))
+        command = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+    except (OSError, ValueError):
+        return False
+    return f"--resume {session.id}" in command
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
+
+
 def parse_decision_request(body: bytes) -> DecisionRequest:
     raw = load_json(body, InvalidReason)
     if not isinstance(raw, dict):
@@ -386,11 +532,18 @@ def parse_decision_request(body: bytes) -> DecisionRequest:
 
 
 def decide(
-    store: TriageStore, gh: RunGh, triage_id: int, action: Action, request: DecisionRequest
+    store: TriageStore,
+    gh: RunGh,
+    resume: ResumeSession,
+    triage_id: int,
+    action: Action,
+    request: DecisionRequest,
 ) -> Decision:
     triage = store.find(triage_id)
     if triage is None:
         raise TriageNotFound("その PR は見つからない")
+    if action is Action.RETURN and triage.session is None:
+        raise AlreadyDecided("この報告には PR を作ったセッションが付いていないので差し戻せない")
     if action not in triage.actions:
         raise AlreadyDecided("この PR にはもうその判断をできない")
     if triage.received_at != request.seen:
@@ -412,7 +565,9 @@ def decide(
         case Action.RETURN:
             if not request.reason.strip() or len(request.reason) > MAX_REASON_LENGTH:
                 raise InvalidReason(f"差し戻す理由は 1〜{MAX_REASON_LENGTH} 字で書く")
-            gh(["pr", "comment", *target, "--body-file", "-"], request.reason)
+            assert triage.session is not None
+            url = pull_request_url(triage.repo, triage.number)
+            resume(triage.session, RETURN_PROMPT.format(url=url, reason=request.reason))
             status, note = "returned", request.reason
         case Action.HOLD:
             status, note = "on_hold", None
@@ -420,7 +575,7 @@ def decide(
             assert_never(action)
     recorded, report_changed = store.decide(triage, status, note, datetime.now(UTC))
     if not recorded:
-        raise AlreadyDecided("GitHub には反映したが、そのあいだに状態が変わったので記録していない")
+        raise AlreadyDecided("反映はしたが、そのあいだに状態が変わったので記録していない")
     if report_changed:
         warnings.append(
             "判断のあいだに新しい報告が届いた。判断はそのまま記録したので、新しい報告を確かめる"
@@ -447,11 +602,14 @@ def import_inbox(inbox: Path, store: TriageStore) -> int:
 
 
 class DashboardServer(ThreadingHTTPServer):
-    def __init__(self, port: int, store: TriageStore, page: Path, gh: RunGh) -> None:
+    def __init__(
+        self, port: int, store: TriageStore, page: Path, gh: RunGh, resume: ResumeSession
+    ) -> None:
         super().__init__((HOST, port), DashboardHandler)
         self.store = store
         self.page = page.read_bytes()
         self.gh = gh
+        self.resume = resume
         self.decision_lock = threading.Lock()
         self.allowed_hosts = frozenset(
             {f"{HOST}:{self.server_port}", f"localhost:{self.server_port}"}
@@ -534,7 +692,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
         try:
             request = parse_decision_request(body)
             with self.server.decision_lock:
-                decision = decide(self.server.store, self.server.gh, triage_id, action, request)
+                decision = decide(
+                    self.server.store,
+                    self.server.gh,
+                    self.server.resume,
+                    triage_id,
+                    action,
+                    request,
+                )
         except DecisionError as error:
             self._reject(error.status, str(error))
             return
@@ -573,7 +738,9 @@ def data_home() -> Path:
 def main() -> None:
     home = data_home()
     store = TriageStore(home / "prs.db")
-    server = DashboardServer(PORT, store, ROOT / "static" / "index.html", run_gh)
+    server = DashboardServer(
+        PORT, store, ROOT / "static" / "index.html", run_gh, resume_in_background(home / "returns")
+    )
     pid_file = home / "server.pid"
     pid_file.write_text(f"{os.getpid()}\n", encoding="utf-8")
     imported = import_inbox(home / "inbox", store)
