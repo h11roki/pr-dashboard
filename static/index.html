@@ -432,8 +432,23 @@
     groupSwitch.setAttribute("aria-checked", String(value));
   }
 
-  function projectKey(repo) {
-    return `${selectedStatus} ${repo}`;
+  function projectKey(status, repo) {
+    return `${status} ${repo}`;
+  }
+
+  function forgetMissing() {
+    const ids = new Set(triages.map((triage) => triage.id));
+    const keys = new Set(triages.map((triage) => projectKey(triage.status, triage.report.repo)));
+    for (const id of expanded.keys()) {
+      if (!ids.has(id)) {
+        expanded.delete(id);
+      }
+    }
+    for (const key of collapsedProjects) {
+      if (!keys.has(key)) {
+        collapsedProjects.delete(key);
+      }
+    }
   }
 
   function readGrouping() {
@@ -480,9 +495,7 @@
     const { report } = triage;
     const { changes } = report;
     card.open = expanded.get(triage.id) ?? open;
-    card.querySelector(".card-header").addEventListener("click", () => {
-      expanded.set(triage.id, !card.open);
-    });
+    card.addEventListener("toggle", () => expanded.set(triage.id, card.open));
     setText(card, ".repo-name", report.repo);
     setText(card, ".number", `#${report.number}`);
     setText(card, ".title", report.title);
@@ -508,16 +521,16 @@
     return card;
   }
 
-  function renderProject(repo, projectCards) {
+  function renderProject(repo, projectCards, status) {
     const project = projectTemplate.content.firstElementChild.cloneNode(true);
-    const key = projectKey(repo);
+    const key = projectKey(status, repo);
     const slash = repo.indexOf("/");
     project.open = !collapsedProjects.has(key);
-    project.querySelector(".project-header").addEventListener("click", () => {
+    project.addEventListener("toggle", () => {
       if (project.open) {
-        collapsedProjects.add(key);
-      } else {
         collapsedProjects.delete(key);
+      } else {
+        collapsedProjects.add(key);
       }
     });
     setText(project, ".project-owner", repo.slice(0, slash + 1));
@@ -527,7 +540,7 @@
     return project;
   }
 
-  function renderProjects(shown) {
+  function renderProjects(shown, status) {
     const projects = new Map();
     for (const triage of shown) {
       const repo = triage.report.repo;
@@ -537,10 +550,14 @@
       projects.get(repo).push(triage);
     }
     const repos = [...projects.keys()].sort((a, b) => a.localeCompare(b));
-    const firstOpenRepo = repos.find((repo) => !collapsedProjects.has(projectKey(repo)));
+    const firstOpenRepo = repos.find((repo) => !collapsedProjects.has(projectKey(status, repo)));
     const firstOpen = firstOpenRepo && projects.get(firstOpenRepo)[0];
     return repos.map((repo) =>
-      renderProject(repo, projects.get(repo).map((triage) => renderCard(triage, triage === firstOpen))),
+      renderProject(
+        repo,
+        projects.get(repo).map((triage) => renderCard(triage, triage === firstOpen)),
+        status,
+      ),
     );
   }
 
@@ -554,7 +571,7 @@
     cards.className = groupByProject ? "project-list" : "card-list";
     cards.replaceChildren(
       ...(groupByProject
-        ? renderProjects(shown)
+        ? renderProjects(shown, selectedStatus)
         : shown.map((triage) => renderCard(triage, triage === shown[0]))),
     );
     if (loadError) {
@@ -578,6 +595,7 @@
       lastResponse = text;
       triages = JSON.parse(text);
       loadError = "";
+      forgetMissing();
       render();
     } catch (error) {
       if (request !== latestRequest) {
