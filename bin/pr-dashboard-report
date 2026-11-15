@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [ $# -ne 1 ]; then
-  echo "使い方: report-pr.sh <PR番号> < 判断材料.json" >&2
+  echo "使い方: pr-dashboard-report <PR番号> < 判断材料.json" >&2
   exit 2
 fi
 
@@ -11,17 +11,17 @@ fail() {
   exit 1
 }
 
-for tool in gh jq curl python3; do
+for tool in gh jq curl; do
   command -v "$tool" >/dev/null || fail "$tool が見つからない"
 done
-python3 -c 'import sys; sys.exit(sys.version_info < (3, 13))' ||
-  fail "python3 は 3.13 以上が要る(今は $(python3 --version 2>&1))"
 
 script="$(readlink -f -- "$0")" || fail "スクリプトの置き場所が分からない"
 root="$(CDPATH='' cd -- "$(dirname -- "$script")/.." && pwd -P)"
+python="$root/libexec/pr-dashboard-python"
+"$python" -c 'pass' || exit 1
 dashboard="${PR_DASHBOARD_URL:-http://127.0.0.1:8787}"
 dashboard="${dashboard%/}"
-inbox="${PR_DASHBOARD_INBOX:-$root/inbox}"
+inbox="${PR_DASHBOARD_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/pr-dashboard}/inbox"
 
 judgment="$(cat)"
 jq -e -s 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1 <<<"$judgment" ||
@@ -44,15 +44,28 @@ body="$(jq -c --argjson facts "$facts" '
   }' <<<"$judgment")"
 read -r label name < <(jq -r '"\(.repo)#\(.number) \(.repo | sub("/"; "_"))-\(.number)"' <<<"$body")
 
-problem="$(python3 -I "$root/server.py" --check 2>&1 <<<"$body")" ||
+problem="$("$python" -I "$root/server.py" --check 2>&1 <<<"$body")" ||
   fail "報告が検証に通らない: $problem"
 
 response="$(mktemp)"
 trap 'rm -f "$response"' EXIT
-curl_exit=0
-status="$(curl -sS --noproxy '*' --max-time 10 -o "$response" -w '%{http_code}' \
-  -X POST "$dashboard/api/prs" -H 'Content-Type: application/json' \
-  --data-binary @- <<<"$body")" || curl_exit=$?
+
+post() {
+  curl_exit=0
+  status="$(curl -s --noproxy '*' --max-time 10 -o "$response" -w '%{http_code}' \
+    -X POST "$dashboard/api/prs" -H 'Content-Type: application/json' \
+    --data-binary @- <<<"$body")" || curl_exit=$?
+}
+
+post
+if [ "$curl_exit" -eq 7 ] && [ -z "${PR_DASHBOARD_URL:-}" ]; then
+  "$root/bin/pr-dashboard-start"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    curl -s --noproxy '*' --max-time 1 -o /dev/null "$dashboard/api/prs" && break
+    sleep 0.5
+  done
+  post
+fi
 
 case "$curl_exit" in
   0) ;;

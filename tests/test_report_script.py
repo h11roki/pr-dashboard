@@ -7,7 +7,7 @@ import pytest
 
 from server import HOST, ROOT, TriageStore
 
-SCRIPT = ROOT / "scripts" / "report-pr.sh"
+SCRIPT = ROOT / "bin" / "pr-dashboard-report"
 REFUSED = f"http://{HOST}:1"
 FACTS_FROM_GH = ("repo", "number", "url", "title", "branch", "changes")
 GH_PR_VIEW = {
@@ -40,7 +40,7 @@ def judgment_of(report: dict[str, object]) -> dict[str, object]:
 
 
 def run_script(
-    bin_dir: Path, judgment: str, dashboard: str, inbox: Path, *args: str
+    bin_dir: Path, judgment: str, dashboard: str, home: Path, *args: str
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(SCRIPT), *args],
@@ -51,7 +51,7 @@ def run_script(
         | {
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
             "PR_DASHBOARD_URL": dashboard,
-            "PR_DASHBOARD_INBOX": str(inbox),
+            "PR_DASHBOARD_HOME": str(home),
         },
         check=False,
         timeout=30,
@@ -63,7 +63,7 @@ def test_sends_the_judgment_with_the_facts_from_gh(
 ) -> None:
     judgment = json.dumps(judgment_of(report))
 
-    result = run_script(fake_gh, judgment, f"http://{HOST}:{port}", tmp_path / "inbox", "128")
+    result = run_script(fake_gh, judgment, f"http://{HOST}:{port}", tmp_path / "home", "128")
 
     assert result.returncode == 0, result.stderr
     assert "acme/web#128" in result.stdout
@@ -74,10 +74,10 @@ def test_sends_the_judgment_with_the_facts_from_gh(
 def test_keeps_the_report_in_the_inbox_when_the_dashboard_is_down(
     tmp_path: Path, report: dict[str, object], fake_gh: Path
 ) -> None:
-    inbox = tmp_path / "inbox"
+    inbox = tmp_path / "home" / "inbox"
     judgment = json.dumps(judgment_of(report))
 
-    result = run_script(fake_gh, judgment, REFUSED, inbox, "128")
+    result = run_script(fake_gh, judgment, REFUSED, tmp_path / "home", "128")
 
     assert result.returncode == 0, result.stderr
     saved = json.loads((inbox / "acme_web-128.json").read_text(encoding="utf-8"))
@@ -87,10 +87,10 @@ def test_keeps_the_report_in_the_inbox_when_the_dashboard_is_down(
 def test_does_not_keep_an_invalid_report_even_when_the_dashboard_is_down(
     tmp_path: Path, report: dict[str, object], fake_gh: Path
 ) -> None:
-    inbox = tmp_path / "inbox"
+    inbox = tmp_path / "home" / "inbox"
     judgment = json.dumps(judgment_of(report) | {"risk": "critical"})
 
-    result = run_script(fake_gh, judgment, REFUSED, inbox, "128")
+    result = run_script(fake_gh, judgment, REFUSED, tmp_path / "home", "128")
 
     assert result.returncode == 1
     assert "risk" in result.stderr
@@ -103,7 +103,7 @@ def test_fails_with_the_reason_when_the_dashboard_refuses(
     judgment = json.dumps(judgment_of(report))
 
     result = run_script(
-        fake_gh, judgment, f"http://{HOST}:{port}/missing", tmp_path / "inbox", "128"
+        fake_gh, judgment, f"http://{HOST}:{port}/missing", tmp_path / "home", "128"
     )
 
     assert result.returncode == 1
@@ -115,7 +115,7 @@ def test_accepts_a_dashboard_url_with_a_trailing_slash(
 ) -> None:
     judgment = json.dumps(judgment_of(report))
 
-    result = run_script(fake_gh, judgment, f"http://{HOST}:{port}/", tmp_path / "inbox", "128")
+    result = run_script(fake_gh, judgment, f"http://{HOST}:{port}/", tmp_path / "home", "128")
 
     assert result.returncode == 0, result.stderr
     assert len(store.list_triages()) == 1
@@ -125,7 +125,7 @@ def test_accepts_a_dashboard_url_with_a_trailing_slash(
 def test_fails_when_the_judgment_is_not_one_json_object(
     tmp_path: Path, fake_gh: Path, judgment: str
 ) -> None:
-    result = run_script(fake_gh, judgment, "http://unused", tmp_path / "inbox", "1")
+    result = run_script(fake_gh, judgment, "http://unused", tmp_path / "home", "1")
 
     assert result.returncode == 1
     assert "JSON" in result.stderr
@@ -135,13 +135,13 @@ def test_fails_when_gh_cannot_read_the_pr(tmp_path: Path, report: dict[str, obje
     failing_gh = write_gh(tmp_path, "exit 1")
     judgment = json.dumps(judgment_of(report))
 
-    result = run_script(failing_gh, judgment, "http://unused", tmp_path / "inbox", "9")
+    result = run_script(failing_gh, judgment, "http://unused", tmp_path / "home", "9")
 
     assert result.returncode == 1
     assert "PR 9" in result.stderr
 
 
 def test_needs_a_pr_number(tmp_path: Path, fake_gh: Path) -> None:
-    result = run_script(fake_gh, "{}", "http://unused", tmp_path / "inbox")
+    result = run_script(fake_gh, "{}", "http://unused", tmp_path / "home")
 
     assert result.returncode == 2
