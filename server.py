@@ -1,8 +1,10 @@
 import json
 import re
 import sqlite3
+import subprocess
 import sys
 import threading
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -22,6 +24,10 @@ REPO_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/(?!\.{1,2}$)[A-Za-z0-9._][A
 REVIEWER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)?")
 RISKS = ("low", "medium", "high")
 TEST_STATUSES = ("passed", "failed", "not_run")
+DECIDABLE_STATUSES = ("pending", "on_hold")
+ACTION_PATH = re.compile(r"/api/prs/([0-9]{1,10})/(request-review|return|hold)")
+MAX_REASON_LENGTH = 2000
+GH_TIMEOUT_SECONDS = 30
 CONTENT_SECURITY_POLICY = "; ".join(
     [
         "default-src 'none'",
@@ -65,9 +71,47 @@ SELECT id, status, note, received_at, decided_at, payload FROM prs
 ORDER BY received_at DESC, id DESC
 """
 
+SELECT_TRIAGE = """
+SELECT id, status, note, received_at, decided_at, payload FROM prs WHERE id = ?
+"""
+
+UPDATE_DECISION = """
+UPDATE prs SET status = ?, note = ?, decided_at = ? WHERE id = ?
+"""
+
+RunGh = Callable[[list[str], str], None]
+
 
 class InvalidReport(ValueError):
     pass
+
+
+class DecisionError(Exception):
+    pass
+
+
+class TriageNotFound(DecisionError):
+    pass
+
+
+class AlreadyDecided(DecisionError):
+    pass
+
+
+class InvalidReason(DecisionError):
+    pass
+
+
+class GhFailed(DecisionError):
+    pass
+
+
+DECISION_ERROR_STATUSES: dict[type[DecisionError], HTTPStatus] = {
+    TriageNotFound: HTTPStatus.NOT_FOUND,
+    AlreadyDecided: HTTPStatus.CONFLICT,
+    InvalidReason: HTTPStatus.BAD_REQUEST,
+    GhFailed: HTTPStatus.BAD_GATEWAY,
+}
 
 
 @dataclass(frozen=True)
@@ -224,17 +268,28 @@ class TriageStore:
     def list_triages(self) -> list[Triage]:
         with self._lock:
             rows = self._connection.execute(SELECT_TRIAGES).fetchall()
-        return [
-            Triage(
-                id=row["id"],
-                status=row["status"],
-                note=row["note"],
-                received_at=row["received_at"],
-                decided_at=row["decided_at"],
-                report=json.loads(row["payload"]),
-            )
-            for row in rows
-        ]
+        return [self._triage(row) for row in rows]
+
+    def find(self, triage_id: int) -> Triage | None:
+        with self._lock:
+            row = self._connection.execute(SELECT_TRIAGE, (triage_id,)).fetchone()
+        return None if row is None else self._triage(row)
+
+    def decide(self, triage_id: int, status: str, note: str | None, decided_at: datetime) -> None:
+        decided = decided_at.astimezone(UTC).isoformat(timespec="milliseconds")
+        with self._lock, self._connection:
+            self._connection.execute(UPDATE_DECISION, (status, note, decided, triage_id))
+
+    @staticmethod
+    def _triage(row: sqlite3.Row) -> Triage:
+        return Triage(
+            id=row["id"],
+            status=row["status"],
+            note=row["note"],
+            received_at=row["received_at"],
+            decided_at=row["decided_at"],
+            report=json.loads(row["payload"]),
+        )
 
     def close(self) -> None:
         self._connection.close()
@@ -248,6 +303,62 @@ def parse_body(body: bytes) -> Report:
     except (ValueError, RecursionError) as error:
         raise InvalidReport(f"JSON として読めない: {error}") from error
     return parse_report(raw)
+
+
+def run_gh(arguments: list[str], stdin: str) -> None:
+    try:
+        completed = subprocess.run(
+            ["gh", *arguments],
+            input=stdin,
+            capture_output=True,
+            text=True,
+            timeout=GH_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise GhFailed(f"gh を実行できなかった: {error}") from error
+    if completed.returncode != 0:
+        raise GhFailed(completed.stderr.strip() or f"gh が {completed.returncode} で終わった")
+
+
+def parse_reason(body: bytes) -> str:
+    try:
+        raw = json.loads(body)
+    except (ValueError, RecursionError) as error:
+        raise InvalidReason(f"JSON として読めない: {error}") from error
+    reason = raw.get("reason", "") if isinstance(raw, dict) else None
+    if not isinstance(reason, str):
+        raise InvalidReason("reason は文字列で送る")
+    return reason
+
+
+def decide(store: TriageStore, gh: RunGh, triage_id: int, action: str, reason: str) -> str:
+    triage = store.find(triage_id)
+    if triage is None:
+        raise TriageNotFound("その PR は見つからない")
+    if triage.status not in DECIDABLE_STATUSES:
+        raise AlreadyDecided("この PR はもう判断してある")
+    report = parse_report(triage.report)
+    target = [str(report.number), "-R", report.repo]
+    now = datetime.now(UTC)
+    match action:
+        case "request-review":
+            gh(["pr", "ready", *target], "")
+            if report.suggested_reviewers:
+                reviewers = ",".join(report.suggested_reviewers)
+                gh(["pr", "edit", *target, "--add-reviewer", reviewers], "")
+            store.decide(triage_id, "requested", None, now)
+            return "requested"
+        case "return":
+            if not reason.strip() or len(reason) > MAX_REASON_LENGTH:
+                raise InvalidReason(f"差し戻す理由は 1〜{MAX_REASON_LENGTH} 字で書く")
+            gh(["pr", "comment", *target, "--body-file", "-"], reason)
+            store.decide(triage_id, "returned", reason, now)
+            return "returned"
+        case "hold":
+            store.decide(triage_id, "on_hold", None, now)
+            return "on_hold"
+    raise ValueError(f"知らない判断: {action}")
 
 
 def import_inbox(inbox: Path, store: TriageStore) -> int:
@@ -269,10 +380,12 @@ def import_inbox(inbox: Path, store: TriageStore) -> int:
 
 
 class DashboardServer(ThreadingHTTPServer):
-    def __init__(self, port: int, store: TriageStore, page: Path) -> None:
+    def __init__(self, port: int, store: TriageStore, page: Path, gh: RunGh) -> None:
         super().__init__((HOST, port), DashboardHandler)
         self.store = store
         self.page = page.read_bytes()
+        self.gh = gh
+        self.decision_lock = threading.Lock()
         self.allowed_hosts = frozenset(
             {f"{HOST}:{self.server_port}", f"localhost:{self.server_port}"}
         )
@@ -296,10 +409,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._reject(HTTPStatus.NOT_FOUND, "見つからない")
 
     def do_POST(self) -> None:
+        path = urlsplit(self.path).path
+        action = ACTION_PATH.fullmatch(path)
         if not self._is_local_request():
             self._reject(HTTPStatus.FORBIDDEN, "ほかのサイトからの要求は受け付けない")
-        elif urlsplit(self.path).path == "/api/prs":
+        elif path == "/api/prs":
             self._receive_report()
+        elif action:
+            self._decide(int(action[1]), action[2])
         else:
             self._reject(HTTPStatus.NOT_FOUND, "見つからない")
 
@@ -309,22 +426,28 @@ class DashboardHandler(BaseHTTPRequestHandler):
             origin is None or origin in self.server.allowed_origins
         )
 
-    def _receive_report(self) -> None:
+    def _read_json_body(self) -> bytes | None:
         length = self.headers.get("Content-Length", "")
         if not (length.isascii() and length.isdigit()):
             self._reject(HTTPStatus.LENGTH_REQUIRED, "Content-Length を付ける")
-            return
+            return None
         digits = length.lstrip("0") or "0"
         if len(digits) > len(str(MAX_BODY_BYTES)) or int(digits) > MAX_BODY_BYTES:
             self._reject(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, f"本文は {MAX_BODY_BYTES} バイトまで")
-            return
+            return None
         try:
             body = self.rfile.read(int(digits))
         except TimeoutError:
             self._reject(HTTPStatus.REQUEST_TIMEOUT, "本文が届かない")
-            return
+            return None
         if self.headers.get_content_type() != "application/json":
             self._reject(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "本文は application/json で送る")
+            return None
+        return body
+
+    def _receive_report(self) -> None:
+        body = self._read_json_body()
+        if body is None:
             return
         try:
             report = parse_body(body)
@@ -333,6 +456,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         saved = self.server.store.save(report, datetime.now(UTC))
         self._send_json(HTTPStatus.OK, {"saved": saved})
+
+    def _decide(self, triage_id: int, action: str) -> None:
+        body = self._read_json_body()
+        if body is None:
+            return
+        try:
+            reason = parse_reason(body)
+            with self.server.decision_lock:
+                status = decide(self.server.store, self.server.gh, triage_id, action, reason)
+        except DecisionError as error:
+            self._reject(DECISION_ERROR_STATUSES[type(error)], str(error))
+            return
+        self._send_json(HTTPStatus.OK, {"status": status})
 
     def _reject(self, status: HTTPStatus, message: str) -> None:
         self._send_json(status, {"error": message})
@@ -353,7 +489,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 def main() -> None:
     store = TriageStore(ROOT / "data" / "prs.db")
-    server = DashboardServer(PORT, store, ROOT / "static" / "index.html")
+    server = DashboardServer(PORT, store, ROOT / "static" / "index.html", run_gh)
     imported = import_inbox(ROOT / "inbox", store)
     if imported:
         print(f"inbox から {imported} 件取り込んだ")

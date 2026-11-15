@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from server import ROOT, DashboardServer, TriageStore
+from server import ROOT, DashboardServer, GhFailed, TriageStore
 
 
 @pytest.fixture
@@ -39,8 +39,25 @@ def store(tmp_path: Path) -> Iterator[TriageStore]:
 
 
 @pytest.fixture
-def port(store: TriageStore) -> Iterator[int]:
-    server = DashboardServer(0, store, ROOT / "static" / "index.html")
+def gh_calls() -> list[tuple[list[str], str]]:
+    return []
+
+
+@pytest.fixture
+def gh_failure() -> list[str]:
+    return []
+
+
+@pytest.fixture
+def port(
+    store: TriageStore, gh_calls: list[tuple[list[str], str]], gh_failure: list[str]
+) -> Iterator[int]:
+    def fake_gh(arguments: list[str], stdin: str) -> None:
+        gh_calls.append((arguments, stdin))
+        if gh_failure:
+            raise GhFailed(gh_failure[0])
+
+    server = DashboardServer(0, store, ROOT / "static" / "index.html", fake_gh)
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
     yield server.server_port
