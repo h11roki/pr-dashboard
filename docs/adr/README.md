@@ -43,3 +43,4 @@
 | [0002](0002-report-after-artifact.md) | 報告は pr-review-fix の最後に 1 回だけ送り、PR は Draft で作る | 承認 |
 | [0003](0003-refuse-foreign-requests.md) | サーバーは Host、Origin、Content-Type を確かめ、ほかのサイトからの要求を断る | 提案 |
 | [0004](0004-shadcn-look-in-plain-css.md) | 画面の見た目は shadcn/ui に合わせ、React を使わずに CSS で写す | 承認 |
+| [0005](0005-group-by-project.md) | PR はリポジトリごとにまとめて見せ、スイッチでまとめない表示に戻せるようにする | 承認 |
