@@ -1,4 +1,5 @@
 import json
+import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -116,6 +117,32 @@ def test_does_not_resume_a_session_that_is_still_running(
     wait_until(lambda: "終了コード" in log_of(logs))
     resume(session, "直ったか確かめて")
     wait_until(lambda: log_of(logs).count("終了コード") == 2)
+
+
+def test_a_pid_left_behind_by_another_process_does_not_block(
+    tmp_path: Path, fake_claude: FakeClaude, workdir: Path
+) -> None:
+    logs = tmp_path / "returns"
+    logs.mkdir()
+    with subprocess.Popen(["sleep", "30"]) as stranger:
+        (logs / f"{SESSION_ID}.pid").write_text(f"{stranger.pid}\n", encoding="utf-8")
+        try:
+            resume_in_background(logs)(Session(id=SESSION_ID, workdir=str(workdir)), "直して")
+
+            assert fake_claude.call()["args"]
+        finally:
+            stranger.kill()
+            fake_claude.finish()
+
+
+def test_stops_claude_when_it_cannot_record_the_resume(
+    tmp_path: Path, fake_claude: FakeClaude, workdir: Path
+) -> None:
+    logs = tmp_path / "returns"
+    (logs / f"{SESSION_ID}.pid").mkdir(parents=True)
+
+    with pytest.raises(ResumeFailed, match="書き残せなかった"):
+        resume_in_background(logs)(Session(id=SESSION_ID, workdir=str(workdir)), "直して")
 
 
 def test_fails_when_the_workdir_is_gone(tmp_path: Path, fake_claude: FakeClaude) -> None:

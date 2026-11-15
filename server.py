@@ -449,7 +449,9 @@ def resume_in_background(logs: Path) -> ResumeSession:
         code = process.wait()
         with log.open("a", encoding="utf-8") as output:
             output.write(f"{_now()} に終わった(終了コード {code})\n")
-        marker.unlink(missing_ok=True)
+        with lock, suppress(OSError):
+            if marker.read_text(encoding="utf-8").strip() == str(process.pid):
+                marker.unlink()
 
     def resume(session: Session, prompt: str) -> None:
         if not Path(session.workdir).is_dir():
@@ -457,7 +459,7 @@ def resume_in_background(logs: Path) -> ResumeSession:
         log = logs / f"{session.id}.log"
         marker = logs / f"{session.id}.pid"
         with lock:
-            if _still_running(marker):
+            if _still_resuming(marker, session):
                 raise SessionBusy("この会話は前の差し戻しをまだ直している。終わってから差し戻す")
             try:
                 logs.mkdir(parents=True, exist_ok=True)
@@ -487,24 +489,35 @@ def resume_in_background(logs: Path) -> ResumeSession:
                         stderr=subprocess.STDOUT,
                         start_new_session=True,
                     )
-                marker.write_text(f"{process.pid}\n", encoding="utf-8")
             except OSError as error:
                 raise ResumeFailed(f"Claude Code を起動できなかった: {error}") from error
+            try:
+                marker.write_text(f"{process.pid}\n", encoding="utf-8")
+            except OSError as error:
+                process.kill()
+                process.wait()
+                raise ResumeFailed(f"再開したことを書き残せなかったので止めた: {error}") from error
         threading.Thread(target=wait_and_record, args=(process, log, marker), daemon=True).start()
 
     return resume
 
 
-def _still_running(marker: Path) -> bool:
+def _still_resuming(marker: Path, session: Session) -> bool:
     try:
-        os.kill(int(marker.read_text(encoding="utf-8")), 0)
+        pid = int(marker.read_text(encoding="utf-8"))
+        command = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
     except (OSError, ValueError):
         return False
-    return True
+    return f"--resume {session.id}" in command
 
 
 def _now() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
 def parse_decision_request(body: bytes) -> DecisionRequest:
@@ -529,6 +542,8 @@ def decide(
     triage = store.find(triage_id)
     if triage is None:
         raise TriageNotFound("その PR は見つからない")
+    if action is Action.RETURN and triage.session is None:
+        raise AlreadyDecided("この報告には PR を作ったセッションが付いていないので差し戻せない")
     if action not in triage.actions:
         raise AlreadyDecided("この PR にはもうその判断をできない")
     if triage.received_at != request.seen:

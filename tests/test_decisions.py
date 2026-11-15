@@ -160,10 +160,11 @@ def test_a_report_without_its_session_cannot_be_returned(
 ) -> None:
     triage = save_pending(store, report)
 
-    status, _ = post_decision(port, triage, "return", "テストが足りない")
+    status, body = post_decision(port, triage, "return", "テストが足りない")
 
     assert Action.RETURN not in triage.actions
     assert status == 409
+    assert "セッション" in body["error"]
     assert resumed == []
     assert status_of(store, triage) == "pending"
 
