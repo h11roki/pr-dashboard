@@ -131,6 +131,7 @@ def test_a_missing_inbox_imports_nothing(tmp_path: Path, store: TriageStore) -> 
     [
         ({"PR_DASHBOARD_HOME": "/srv/dashboard", "XDG_DATA_HOME": "/xdg"}, "/srv/dashboard"),
         ({"XDG_DATA_HOME": "/xdg"}, "/xdg/pr-dashboard"),
+        ({"PR_DASHBOARD_HOME": "dashboard", "XDG_DATA_HOME": "/xdg"}, "/xdg/pr-dashboard"),
         ({"XDG_DATA_HOME": "relative/share"}, "/home/someone/.local/share/pr-dashboard"),
         ({}, "/home/someone/.local/share/pr-dashboard"),
     ],

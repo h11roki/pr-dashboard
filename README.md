@@ -113,7 +113,7 @@ PR は Draft で作るのがおすすめです。判断するまでレビュア�
 
 ## データと起動
 
-データは `~/.local/share/pr-dashboard/` に置きます。`PR_DASHBOARD_HOME` を設定するとその場所に、`XDG_DATA_HOME` を絶対パスで設定しているとその下に置きます。
+データは `~/.local/share/pr-dashboard/` に置きます。`PR_DASHBOARD_HOME` を絶対パスで設定するとその場所に、`XDG_DATA_HOME` を絶対パスで設定しているとその下に置きます。
 
 | ファイル | 中身 |
 |---|---|

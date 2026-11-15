@@ -16,11 +16,11 @@ running() {
 
 if [ "${1:-}" = "--restart" ]; then
   pid="$(cat "$home/server.pid" 2>/dev/null)" || pid=""
-  if [ -n "$pid" ] && ps -p "$pid" -o command= | grep -q 'server\.py'; then
+  if [ -n "$pid" ] && ps -p "$pid" -o command= | grep -q 'pr-dashboard.*/server\.py'; then
     kill "$pid"
   fi
-  for _ in {1..20}; do
-    running || break
+  deadline=$((SECONDS + 5))
+  while running && [ "$SECONDS" -lt "$deadline" ]; do
     sleep 0.25
   done
   if running; then
@@ -36,14 +36,14 @@ mkdir -p "$home"
 nohup "$root/libexec/pr-dashboard-python" -I "$root/server.py" \
   >>"$home/server.log" 2>&1 </dev/null &
 launched=$!
-for _ in {1..40}; do
-  if running; then
-    exit 0
-  fi
+deadline=$((SECONDS + 10))
+until running; do
   if ! kill -0 "$launched" 2>/dev/null; then
     running || fail "ダッシュボードを起動できなかった。理由は $home/server.log にある"
     exit 0
   fi
+  if [ "$SECONDS" -ge "$deadline" ]; then
+    fail "ダッシュボードの起動に時間がかかっている。様子は $home/server.log にある"
+  fi
   sleep 0.25
 done
-running || fail "ダッシュボードの起動に時間がかかっている。様子は $home/server.log にある"

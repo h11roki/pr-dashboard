@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ -n "${PR_DASHBOARD_HOME:-}" ]; then
+if [[ "${PR_DASHBOARD_HOME:-}" == /* ]]; then
   echo "$PR_DASHBOARD_HOME"
 elif [[ "${XDG_DATA_HOME:-}" == /* ]]; then
   echo "$XDG_DATA_HOME/pr-dashboard"
