@@ -1,10 +1,10 @@
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
 
-from server import ROOT, DashboardServer, TriageStore
+from server import ROOT, DashboardServer, GhFailed, TriageStore
 
 
 @pytest.fixture
@@ -39,8 +39,31 @@ def store(tmp_path: Path) -> Iterator[TriageStore]:
 
 
 @pytest.fixture
-def port(store: TriageStore) -> Iterator[int]:
-    server = DashboardServer(0, store, ROOT / "static" / "index.html")
+def gh_calls() -> list[tuple[list[str], str]]:
+    return []
+
+
+@pytest.fixture
+def gh_failures() -> dict[str, str]:
+    return {}
+
+
+@pytest.fixture
+def recording_gh(
+    gh_calls: list[tuple[list[str], str]], gh_failures: dict[str, str]
+) -> Callable[[list[str], str], None]:
+    def run(arguments: list[str], stdin: str) -> None:
+        gh_calls.append((arguments, stdin))
+        if arguments[1] in gh_failures:
+            raise GhFailed(gh_failures[arguments[1]])
+
+    return run
+
+
+@pytest.fixture
+def port(store: TriageStore, recording_gh: Callable[[list[str], str], None]) -> Iterator[int]:
+
+    server = DashboardServer(0, store, ROOT / "static" / "index.html", recording_gh)
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
     yield server.server_port

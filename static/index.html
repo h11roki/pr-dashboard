@@ -153,6 +153,18 @@
   }
   .switch[aria-checked="true"] .switch-thumb { transform: translateX(calc(100% - 2px)); }
 
+  .notices { display: grid; gap: 8px; margin: 0 0 16px; padding: 0; list-style: none; }
+  .notices:empty { display: none; }
+  .notices li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 6px 6px 16px;
+    border: 1px solid var(--warn);
+    border-radius: var(--radius);
+    background: color-mix(in oklch, var(--warn) 10%, transparent);
+  }
   .message[data-kind="loading"] { color: var(--muted-foreground); }
   .message[data-kind="empty"] {
     padding: 48px 24px;
@@ -241,11 +253,38 @@
   .card-footer {
     display: flex;
     flex-wrap: wrap;
-    justify-content: flex-end;
+    justify-content: space-between;
     gap: 8px;
     margin-top: 24px;
     padding: 0 24px;
   }
+  .actions, .links { display: flex; flex-wrap: wrap; gap: 8px; }
+  .links { margin-left: auto; }
+  .decision {
+    display: grid;
+    gap: 12px;
+    margin: 16px 24px 0;
+    padding: 12px 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--muted);
+  }
+  .reason {
+    display: block;
+    width: 100%;
+    min-height: 64px;
+    padding: 8px 12px;
+    border: 1px solid var(--input);
+    border-radius: calc(var(--radius) - 2px);
+    background: var(--background);
+    color: var(--foreground);
+    box-shadow: var(--shadow-xs);
+    font: inherit;
+    resize: vertical;
+  }
+  .reason::placeholder { color: var(--muted-foreground); }
+  .decision-buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+  .decision-error { margin: 12px 24px 0; color: var(--destructive); }
 
   .badge {
     display: inline-flex;
@@ -292,12 +331,20 @@
     background: var(--background);
     color: var(--foreground);
     box-shadow: var(--shadow-xs);
+    font: inherit;
     font-weight: 500;
     text-decoration: none;
     white-space: nowrap;
+    cursor: pointer;
     transition: background-color 0.15s;
   }
   .button:hover { background: var(--accent); color: var(--accent-foreground); }
+  .button.primary { border-color: transparent; background: var(--primary); color: var(--primary-foreground); }
+  .button.primary:hover { background: color-mix(in oklch, var(--primary) 90%, transparent); }
+  .button.ghost { border-color: transparent; background: none; box-shadow: none; }
+  .button.ghost:hover { background: var(--accent); }
+  .button:disabled { opacity: 0.5; pointer-events: none; }
+  [hidden] { display: none !important; }
   @media (prefers-color-scheme: dark) {
     .tabs-trigger[aria-pressed="true"] {
       border-color: var(--input);
@@ -312,6 +359,7 @@
   .switch:focus-visible,
   .tabs-trigger:focus-visible,
   .button:focus-visible,
+  .reason:focus-visible,
   .project-header:focus-visible {
     border-color: var(--ring);
     box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
@@ -323,6 +371,7 @@
     .page { padding-top: 24px; }
     .tabs-list { display: flex; width: 100%; }
     .tabs-trigger { flex: 1; justify-content: center; gap: 4px; padding: 4px 6px; font-size: 13px; }
+    .actions, .links { width: 100%; }
     .card-footer .button { flex: 1; justify-content: center; }
     .card-header { grid-template-columns: 1fr; }
     .card-action { grid-column: 1; grid-row: auto; justify-content: flex-start; order: 4; }
@@ -349,6 +398,7 @@
       <label for="group-by-project">プロジェクトごとにまとめる</label>
     </div>
   </div>
+  <ul id="notices" class="notices" role="status"></ul>
   <p id="message" class="message" role="status" data-kind="loading">読み込み中…</p>
   <div id="cards" class="card-list"></div>
 </div>
@@ -396,9 +446,25 @@
       </dl>
     </div>
     <div class="card-footer">
-      <a class="button pr-link" target="_blank" rel="noopener noreferrer">GitHub で開く<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg></a>
-      <a class="button artifact-link" target="_blank" rel="noopener noreferrer">変更説明を開く<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg></a>
+      <div class="actions">
+        <button type="button" class="button primary" data-action="request-review">レビュー依頼</button>
+        <button type="button" class="button" data-action="return">差し戻し</button>
+        <button type="button" class="button ghost" data-action="hold">保留</button>
+      </div>
+      <div class="links">
+        <a class="button pr-link" target="_blank" rel="noopener noreferrer">GitHub で開く<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg></a>
+        <a class="button artifact-link" target="_blank" rel="noopener noreferrer">変更説明を開く<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg></a>
+      </div>
     </div>
+    <div class="decision" hidden>
+      <p class="decision-text"></p>
+      <textarea class="reason" rows="3" aria-label="差し戻す理由" placeholder="直してほしいことを書く(PR にコメントします)"></textarea>
+      <div class="decision-buttons">
+        <button type="button" class="button" data-cancel>やめる</button>
+        <button type="button" class="button primary" data-confirm></button>
+      </div>
+    </div>
+    <p class="decision-error" role="alert" hidden></p>
   </details>
 </template>
 <script>
@@ -412,6 +478,19 @@
     failed: { label: "テスト 失敗", tone: "bad" },
     not_run: { label: "テスト 未実行", tone: "warn" },
   };
+  const CONFIRMATIONS = {
+    "request-review": {
+      label: "レビューに出す",
+      text: (triage) =>
+        triage.reviewers.length
+          ? `Draft を外し、${triage.reviewers.join("、")} にレビューを頼みます。`
+          : "Draft を外して Ready にします。レビュアーの候補はいません。",
+    },
+    return: {
+      label: "差し戻す",
+      text: () => "理由を PR にコメントし、差し戻しにします。",
+    },
+  };
   const receivedFormat = new Intl.DateTimeFormat("ja-JP", {
     month: "numeric",
     day: "numeric",
@@ -421,6 +500,7 @@
   const tabs = [...document.querySelectorAll(".tabs-trigger")];
   const cards = document.getElementById("cards");
   const message = document.getElementById("message");
+  const notices = document.getElementById("notices");
   const template = document.getElementById("card-template");
   const projectTemplate = document.getElementById("project-template");
   const groupSwitch = document.getElementById("group-by-project");
@@ -433,6 +513,8 @@
   let groupByProject = true;
   const expanded = new Map();
   const collapsedProjects = new Set();
+  const drafts = new Map();
+  const runningDecisions = new Set();
 
   function applyGrouping(value) {
     groupByProject = value;
@@ -444,16 +526,21 @@
   }
 
   function updateViewState(previouslyReceived) {
-    const ids = new Set(triages.map((triage) => triage.id));
+    const byId = new Map(triages.map((triage) => [triage.id, triage]));
     const keys = new Set(triages.map((triage) => projectKey(triage.status, triage.report.repo)));
     for (const id of expanded.keys()) {
-      if (!ids.has(id)) {
+      if (!byId.has(id)) {
         expanded.delete(id);
       }
     }
     for (const key of collapsedProjects) {
       if (!keys.has(key)) {
         collapsedProjects.delete(key);
+      }
+    }
+    for (const [id, draft] of drafts) {
+      if (!byId.get(id)?.actions.includes(draft.action)) {
+        drafts.delete(id);
       }
     }
     for (const triage of triages) {
@@ -503,10 +590,28 @@
     message.hidden = text === "";
   }
 
+  function addNotice(triage, text) {
+    const item = document.createElement("li");
+    const close = Object.assign(document.createElement("button"), {
+      type: "button",
+      className: "button ghost",
+      textContent: "閉じる",
+    });
+    close.addEventListener("click", () => item.remove());
+    item.append(
+      Object.assign(document.createElement("span"), {
+        textContent: `${triage.repo}#${triage.number}: ${text}`,
+      }),
+      close,
+    );
+    notices.prepend(item);
+  }
+
   function renderCard(triage, open) {
     const card = template.content.firstElementChild.cloneNode(true);
     const { report } = triage;
     const { changes } = report;
+    card.dataset.id = triage.id;
     card.open = expanded.get(triage.id) ?? open;
     card.addEventListener("toggle", () => expanded.set(triage.id, card.open));
     setText(card, ".repo-name", report.repo);
@@ -531,7 +636,102 @@
     } else {
       artifactLink.remove();
     }
+    setUpDecisions(card, triage);
     return card;
+  }
+
+  async function postDecision(triage, action, reason) {
+    const response = await fetch(`/api/prs/${triage.id}/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ seen: triage.received_at, reason }),
+    });
+    if (!response.ok) {
+      const problem = await response.json().catch(() => ({}));
+      throw new Error(problem.error ?? `HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async function decideOn(triage) {
+    const draft = drafts.get(triage.id);
+    draft.error = "";
+    runningDecisions.add(triage.id);
+    render();
+    try {
+      const decision = await postDecision(triage, draft.action, draft.reason);
+      drafts.delete(triage.id);
+      if (decision.warning) {
+        addNotice(triage, decision.warning);
+      }
+    } catch (problem) {
+      draft.error = `できませんでした: ${problem.message}`;
+    } finally {
+      runningDecisions.delete(triage.id);
+    }
+    await refresh();
+    if (draft.error && !drafts.has(triage.id)) {
+      addNotice(triage, draft.error);
+    }
+    render();
+  }
+
+  function setUpDecisions(card, triage) {
+    const actions = card.querySelector(".actions");
+    const panel = card.querySelector(".decision");
+    const reason = panel.querySelector(".reason");
+    const confirm = panel.querySelector("[data-confirm]");
+    const error = card.querySelector(".decision-error");
+    if (triage.actions.length === 0) {
+      actions.remove();
+      panel.remove();
+      error.remove();
+      return;
+    }
+    for (const button of actions.querySelectorAll("button")) {
+      if (!triage.actions.includes(button.dataset.action)) {
+        button.remove();
+      }
+    }
+    for (const button of card.querySelectorAll(".actions button, .decision button")) {
+      button.disabled = runningDecisions.has(triage.id);
+    }
+
+    function showDraft() {
+      const draft = drafts.get(triage.id);
+      error.textContent = draft?.error ?? "";
+      error.hidden = !draft?.error;
+      panel.hidden = !draft || draft.action === "hold";
+      if (panel.hidden) {
+        return;
+      }
+      setText(panel, ".decision-text", CONFIRMATIONS[draft.action].text(triage));
+      confirm.textContent = CONFIRMATIONS[draft.action].label;
+      reason.hidden = draft.action !== "return";
+      reason.value = draft.reason;
+    }
+
+    for (const button of actions.querySelectorAll("button")) {
+      button.addEventListener("click", () => {
+        const action = button.dataset.action;
+        drafts.set(triage.id, { action, reason: drafts.get(triage.id)?.reason ?? "", error: "" });
+        if (action === "hold") {
+          decideOn(triage);
+          return;
+        }
+        showDraft();
+        (action === "return" ? reason : confirm).focus();
+      });
+    }
+    reason.addEventListener("input", () => {
+      drafts.get(triage.id).reason = reason.value;
+    });
+    confirm.addEventListener("click", () => decideOn(triage));
+    panel.querySelector("[data-cancel]").addEventListener("click", () => {
+      drafts.delete(triage.id);
+      showDraft();
+    });
+    showDraft();
   }
 
   function renderProject(repo, projectCards, key) {
@@ -572,6 +772,13 @@
   }
 
   function render() {
+    const typing = document.activeElement?.classList.contains("reason")
+      ? {
+          id: document.activeElement.closest(".card").dataset.id,
+          start: document.activeElement.selectionStart,
+          end: document.activeElement.selectionEnd,
+        }
+      : null;
     for (const tab of tabs) {
       const status = tab.dataset.status;
       tab.setAttribute("aria-pressed", String(status === selectedStatus));
@@ -588,6 +795,11 @@
         ? renderProjects(shown, selectedStatus, firstOpen)
         : shown.map((triage) => renderCard(triage, triage === firstOpen))),
     );
+    const reason = typing && cards.querySelector(`.card[data-id="${typing.id}"] .reason`);
+    if (reason && !reason.hidden) {
+      reason.focus();
+      reason.setSelectionRange(typing.start, typing.end);
+    }
     if (loadError) {
       setMessage("error", `読み込めませんでした: ${loadError}`);
     } else {
