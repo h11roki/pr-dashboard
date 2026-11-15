@@ -21,22 +21,26 @@ GH_PR_VIEW = {
 }
 
 
-@pytest.fixture
-def fake_gh(tmp_path: Path) -> Path:
+def write_gh(tmp_path: Path, body: str) -> Path:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     gh = bin_dir / "gh"
-    gh.write_text(
-        "#!/usr/bin/env bash\n"
-        'if [ "$1" = "pr" ]; then\n'
-        f"  echo '{json.dumps(GH_PR_VIEW, ensure_ascii=False)}'\n"
-        "else\n"
-        "  echo acme/web\n"
-        "fi\n",
-        encoding="utf-8",
-    )
+    gh.write_text(f"#!/usr/bin/env bash\n{body}\n", encoding="utf-8")
     gh.chmod(0o755)
     return bin_dir
+
+
+@pytest.fixture
+def fake_gh(tmp_path: Path) -> Path:
+    return write_gh(tmp_path, f"echo '{json.dumps(GH_PR_VIEW, ensure_ascii=False)}'")
+
+
+@pytest.fixture
+def refused_port() -> int:
+    with socket.socket() as probe:
+        probe.bind((HOST, 0))
+        port: int = probe.getsockname()[1]
+    return port
 
 
 def judgment_of(report: dict[str, object]) -> dict[str, object]:
@@ -44,11 +48,11 @@ def judgment_of(report: dict[str, object]) -> dict[str, object]:
 
 
 def run_script(
-    bin_dir: Path, judgment: dict[str, object], dashboard: str, inbox: Path, *args: str
+    bin_dir: Path, judgment: str, dashboard: str, inbox: Path, *args: str
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(SCRIPT), *args],
-        input=json.dumps(judgment),
+        input=judgment,
         capture_output=True,
         text=True,
         env=os.environ
@@ -62,59 +66,78 @@ def run_script(
     )
 
 
-def closed_port() -> int:
-    with socket.socket() as probe:
-        probe.bind((HOST, 0))
-        port: int = probe.getsockname()[1]
-    return port
-
-
 def test_sends_the_judgment_with_the_facts_from_gh(
     tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
 ) -> None:
-    result = run_script(
-        fake_gh, judgment_of(report), f"http://{HOST}:{port}", tmp_path / "inbox", "128"
-    )
+    judgment = json.dumps(judgment_of(report))
+
+    result = run_script(fake_gh, judgment, f"http://{HOST}:{port}", tmp_path / "inbox", "128")
 
     assert result.returncode == 0, result.stderr
+    assert "acme/web#128" in result.stdout
     [triage] = store.list_triages()
     assert triage.report == report
 
 
 def test_keeps_the_report_in_the_inbox_when_the_dashboard_is_down(
-    tmp_path: Path, report: dict[str, object], fake_gh: Path
+    tmp_path: Path, refused_port: int, report: dict[str, object], fake_gh: Path
 ) -> None:
     inbox = tmp_path / "inbox"
+    judgment = json.dumps(judgment_of(report))
 
-    result = run_script(
-        fake_gh, judgment_of(report), f"http://{HOST}:{closed_port()}", inbox, "128"
-    )
+    result = run_script(fake_gh, judgment, f"http://{HOST}:{refused_port}", inbox, "128")
 
-    assert result.returncode == 0
-    assert "inbox" in result.stderr
+    assert result.returncode == 0, result.stderr
     saved = json.loads((inbox / "acme_web-128.json").read_text(encoding="utf-8"))
     assert saved == report
 
 
-def test_fails_with_the_reason_when_the_dashboard_refuses(
-    tmp_path: Path, port: int, report: dict[str, object], fake_gh: Path
+def test_does_not_keep_an_invalid_report_even_when_the_dashboard_is_down(
+    tmp_path: Path, refused_port: int, report: dict[str, object], fake_gh: Path
 ) -> None:
     inbox = tmp_path / "inbox"
+    judgment = json.dumps(judgment_of(report) | {"risk": "critical"})
 
-    result = run_script(
-        fake_gh,
-        judgment_of(report) | {"risk": "critical"},
-        f"http://{HOST}:{port}",
-        inbox,
-        "128",
-    )
+    result = run_script(fake_gh, judgment, f"http://{HOST}:{refused_port}", inbox, "128")
 
     assert result.returncode == 1
     assert "risk" in result.stderr
     assert not inbox.exists()
 
 
-def test_needs_a_pr_number(tmp_path: Path, report: dict[str, object], fake_gh: Path) -> None:
-    result = run_script(fake_gh, judgment_of(report), "http://unused", tmp_path / "inbox")
+def test_fails_with_the_reason_when_the_dashboard_refuses(
+    tmp_path: Path, port: int, report: dict[str, object], fake_gh: Path
+) -> None:
+    judgment = json.dumps(judgment_of(report))
+
+    result = run_script(
+        fake_gh, judgment, f"http://{HOST}:{port}/missing", tmp_path / "inbox", "128"
+    )
+
+    assert result.returncode == 1
+    assert "404" in result.stderr
+
+
+def test_fails_when_the_judgment_is_not_json(tmp_path: Path, port: int, fake_gh: Path) -> None:
+    result = run_script(fake_gh, "summary: なし", f"http://{HOST}:{port}", tmp_path / "inbox", "1")
+
+    assert result.returncode == 1
+    assert "JSON" in result.stderr
+
+
+def test_fails_when_gh_cannot_read_the_pr(
+    tmp_path: Path, port: int, report: dict[str, object]
+) -> None:
+    failing_gh = write_gh(tmp_path, "exit 1")
+    judgment = json.dumps(judgment_of(report))
+
+    result = run_script(failing_gh, judgment, f"http://{HOST}:{port}", tmp_path / "inbox", "9")
+
+    assert result.returncode == 1
+    assert "PR 9" in result.stderr
+
+
+def test_needs_a_pr_number(tmp_path: Path, fake_gh: Path) -> None:
+    result = run_script(fake_gh, "{}", "http://unused", tmp_path / "inbox")
 
     assert result.returncode == 2
