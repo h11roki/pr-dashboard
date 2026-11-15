@@ -76,8 +76,12 @@ SELECT_TRIAGE = """
 SELECT id, repo, number, status, note, received_at, decided_at, payload FROM prs WHERE id = ?
 """
 
+SELECT_DECISION_STATE = """
+SELECT status, received_at FROM prs WHERE id = ?
+"""
+
 UPDATE_DECISION = """
-UPDATE prs SET status = ?, note = ?, decided_at = ? WHERE id = ? AND status = ?
+UPDATE prs SET status = ?, note = ?, decided_at = ? WHERE id = ?
 """
 
 RunGh = Callable[[list[str], str], None]
@@ -100,36 +104,27 @@ class InvalidReport(ValueError):
 
 
 class DecisionError(Exception):
-    pass
+    status = HTTPStatus.BAD_REQUEST
 
 
 class TriageNotFound(DecisionError):
-    pass
+    status = HTTPStatus.NOT_FOUND
 
 
 class AlreadyDecided(DecisionError):
-    pass
+    status = HTTPStatus.CONFLICT
 
 
 class ReportChanged(DecisionError):
-    pass
+    status = HTTPStatus.CONFLICT
 
 
 class InvalidReason(DecisionError):
-    pass
+    status = HTTPStatus.BAD_REQUEST
 
 
 class GhFailed(DecisionError):
-    pass
-
-
-DECISION_ERROR_STATUSES: dict[type[DecisionError], HTTPStatus] = {
-    TriageNotFound: HTTPStatus.NOT_FOUND,
-    AlreadyDecided: HTTPStatus.CONFLICT,
-    ReportChanged: HTTPStatus.CONFLICT,
-    InvalidReason: HTTPStatus.BAD_REQUEST,
-    GhFailed: HTTPStatus.BAD_GATEWAY,
-}
+    status = HTTPStatus.BAD_GATEWAY
 
 
 @dataclass(frozen=True)
@@ -309,13 +304,16 @@ class TriageStore:
             row = self._connection.execute(SELECT_TRIAGE, (triage_id,)).fetchone()
         return None if row is None else self._triage(row)
 
-    def decide(self, triage: Triage, status: str, note: str | None, decided_at: datetime) -> bool:
+    def decide(
+        self, triage: Triage, status: str, note: str | None, decided_at: datetime
+    ) -> tuple[bool, bool]:
         decided = decided_at.astimezone(UTC).isoformat(timespec="milliseconds")
         with self._lock, self._connection:
-            cursor = self._connection.execute(
-                UPDATE_DECISION, (status, note, decided, triage.id, triage.status)
-            )
-        return cursor.rowcount == 1
+            row = self._connection.execute(SELECT_DECISION_STATE, (triage.id,)).fetchone()
+            if row is None or row["status"] != triage.status:
+                return False, False
+            self._connection.execute(UPDATE_DECISION, (status, note, decided, triage.id))
+        return True, row["received_at"] != triage.received_at
 
     @staticmethod
     def _triage(row: sqlite3.Row) -> Triage:
@@ -419,13 +417,13 @@ def decide(
             status, note = "on_hold", None
         case _:
             assert_never(action)
-    current = store.find(triage_id)
-    if current is not None and current.received_at != triage.received_at:
+    recorded, report_changed = store.decide(triage, status, note, datetime.now(UTC))
+    if not recorded:
+        raise AlreadyDecided("GitHub には反映したが、そのあいだに状態が変わったので記録していない")
+    if report_changed:
         warnings.append(
             "判断のあいだに新しい報告が届いた。判断はそのまま記録したので、新しい報告を確かめる"
         )
-    if not store.decide(triage, status, note, datetime.now(UTC)):
-        raise AlreadyDecided("判断のあいだに状態が変わった")
     return Decision(status, " ".join(warnings))
 
 
@@ -534,7 +532,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             with self.server.decision_lock:
                 decision = decide(self.server.store, self.server.gh, triage_id, action, request)
         except DecisionError as error:
-            self._reject(DECISION_ERROR_STATUSES[type(error)], str(error))
+            self._reject(error.status, str(error))
             return
         except sqlite3.Error as error:
             self._reject(HTTPStatus.INTERNAL_SERVER_ERROR, f"判断を記録できなかった: {error}")
