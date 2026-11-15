@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent
 HOST = "127.0.0.1"
@@ -21,7 +21,6 @@ MAX_PR_NUMBER = 2**31 - 1
 REPO_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/(?!\.{1,2}$)[A-Za-z0-9._][A-Za-z0-9._-]*")
 RISKS = ("low", "medium", "high")
 TEST_STATUSES = ("passed", "failed", "not_run")
-STATUSES = ("pending", "requested", "returned", "on_hold")
 CONTENT_SECURITY_POLICY = "; ".join(
     [
         "default-src 'none'",
@@ -55,14 +54,14 @@ ON CONFLICT (repo, number) DO UPDATE SET
     payload = excluded.payload,
     received_at = excluded.received_at,
     status = CASE status WHEN 'returned' THEN 'pending' ELSE status END,
+    note = CASE status WHEN 'returned' THEN NULL ELSE note END,
     decided_at = CASE status WHEN 'returned' THEN NULL ELSE decided_at END
 RETURNING id
 """
 
 SELECT_TRIAGES = """
 SELECT id, status, note, received_at, decided_at, payload FROM prs
-WHERE ? IS NULL OR status = ?
-ORDER BY status = 'pending' DESC, received_at DESC, id DESC
+ORDER BY received_at DESC, id DESC
 """
 
 
@@ -158,6 +157,10 @@ def _https_url(data: dict[str, object], key: str) -> str:
 def parse_report(raw: object) -> Report:
     if not isinstance(raw, dict):
         raise InvalidReport("報告は JSON のオブジェクトで送る")
+    try:
+        json.dumps(raw, ensure_ascii=False).encode()
+    except UnicodeEncodeError as error:
+        raise InvalidReport("UTF-8 で表せない文字を含めない") from error
     repo = _field(raw, "repo", str)
     if not REPO_PATTERN.fullmatch(repo):
         raise InvalidReport("repo は owner/name の形で指定する")
@@ -214,15 +217,17 @@ class TriageStore:
             ).fetchone()
         return int(row["id"])
 
-    def list_triages(self, status: str | None) -> list[Triage]:
+    def list_triages(self) -> list[Triage]:
         with self._lock:
-            rows = self._connection.execute(SELECT_TRIAGES, (status, status)).fetchall()
+            rows = self._connection.execute(SELECT_TRIAGES).fetchall()
         return [
             Triage(
                 id=row["id"],
                 status=row["status"],
                 note=row["note"],
-                received_at=row["received_at"],
+                received_at=datetime.fromisoformat(row["received_at"]).isoformat(
+                    timespec="milliseconds"
+                ),
                 decided_at=row["decided_at"],
                 report=json.loads(row["payload"]),
             )
@@ -269,7 +274,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif url.path == "/":
             self._send(HTTPStatus.OK, "text/html; charset=utf-8", self.server.page)
         elif url.path == "/api/prs":
-            self._send_triages(url.query)
+            triages = self.server.store.list_triages()
+            self._send_json(HTTPStatus.OK, [asdict(triage) for triage in triages])
         else:
             self._reject(HTTPStatus.NOT_FOUND, "見つからない")
 
@@ -292,7 +298,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if not (length.isascii() and length.isdigit()):
             self._reject(HTTPStatus.LENGTH_REQUIRED, "Content-Length を付ける")
             return
-        if int(length) > MAX_BODY_BYTES:
+        if len(length) > len(str(MAX_BODY_BYTES)) or int(length) > MAX_BODY_BYTES:
             self._reject(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, f"本文は {MAX_BODY_BYTES} バイトまで")
             return
         try:
@@ -309,15 +315,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._reject(HTTPStatus.BAD_REQUEST, str(error))
             return
         self._send_json(HTTPStatus.OK, {"id": self.server.store.save(report)})
-
-    def _send_triages(self, query: str) -> None:
-        statuses = parse_qs(query).get("status")
-        status = statuses[0] if statuses else None
-        if status is not None and status not in STATUSES:
-            self._reject(HTTPStatus.BAD_REQUEST, f"status は {' / '.join(STATUSES)} のどれか")
-            return
-        triages = self.server.store.list_triages(status)
-        self._send_json(HTTPStatus.OK, [asdict(triage) for triage in triages])
 
     def _reject(self, status: HTTPStatus, message: str) -> None:
         self._send_json(status, {"error": message})

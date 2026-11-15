@@ -22,6 +22,13 @@ def test_rejects_a_body_that_is_not_an_object() -> None:
         parse_report([])
 
 
+def test_rejects_text_that_cannot_be_stored_as_utf8(report: dict[str, object]) -> None:
+    report["title"] = "\ud800"
+
+    with pytest.raises(InvalidReport, match="UTF-8"):
+        parse_report(report)
+
+
 def test_rejects_a_missing_field(report: dict[str, object]) -> None:
     del report["why"]
 

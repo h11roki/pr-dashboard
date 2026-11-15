@@ -51,7 +51,7 @@ def test_a_posted_report_appears_in_the_pending_list(port: int, report: dict[str
     assert status == 200
     assert json.loads(body) == {"id": 1}
 
-    status, body = send(port, "GET", "/api/prs?status=pending")
+    status, body = send(port, "GET", "/api/prs")
 
     assert status == 200
     [triage] = json.loads(body)
@@ -75,7 +75,7 @@ def test_refuses_a_foreign_origin(port: int, store: TriageStore, report: dict[st
     status, _ = post_report(port, report, {"Origin": "https://attacker.example"})
 
     assert status == 403
-    assert store.list_triages(None) == []
+    assert store.list_triages() == []
 
 
 def test_refuses_a_body_that_is_not_json(port: int, report: dict[str, object]) -> None:
@@ -138,10 +138,12 @@ def test_answers_deeply_nested_json_with_an_error(port: int) -> None:
     assert status == 400
 
 
-def test_refuses_an_unknown_status(port: int) -> None:
-    status, _ = send(port, "GET", "/api/prs?status=merged")
+def test_refuses_an_absurdly_long_content_length(port: int) -> None:
+    headers = {"Content-Type": "application/json", "Content-Length": "9" * 5000}
 
-    assert status == 400
+    status, _ = send(port, "POST", "/api/prs", b"{}", headers)
+
+    assert status == 413
 
 
 def test_unknown_paths_are_not_found(port: int) -> None:
