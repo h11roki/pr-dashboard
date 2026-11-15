@@ -26,7 +26,6 @@ REPO_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/(?!\.{1,2}$)[A-Za-z0-9._][A
 REVIEWER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)?")
 RISKS = ("low", "medium", "high")
 TEST_STATUSES = ("passed", "failed", "not_run")
-DECIDABLE_STATUSES = ("pending", "on_hold")
 ACTION_PATH = re.compile(r"/api/prs/([0-9]{1,10})/(request-review|return|hold)")
 MAX_REASON_LENGTH = 2000
 GH_TIMEOUT_SECONDS = 30
@@ -78,8 +77,7 @@ SELECT id, repo, number, status, note, received_at, decided_at, payload FROM prs
 """
 
 UPDATE_DECISION = """
-UPDATE prs SET status = ?, note = ?, decided_at = ?
-WHERE id = ? AND received_at = ? AND status IN ('pending', 'on_hold')
+UPDATE prs SET status = ?, note = ?, decided_at = ? WHERE id = ? AND status = ?
 """
 
 RunGh = Callable[[list[str], str], None]
@@ -89,6 +87,12 @@ class Action(StrEnum):
     REQUEST_REVIEW = "request-review"
     RETURN = "return"
     HOLD = "hold"
+
+
+ALLOWED_ACTIONS: dict[str, tuple[Action, ...]] = {
+    "pending": (Action.REQUEST_REVIEW, Action.RETURN, Action.HOLD),
+    "on_hold": (Action.REQUEST_REVIEW, Action.RETURN),
+}
 
 
 class InvalidReport(ValueError):
@@ -135,6 +139,12 @@ class Decision:
 
 
 @dataclass(frozen=True)
+class DecisionRequest:
+    seen: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class Changes:
     files: int
     additions: int
@@ -175,6 +185,8 @@ class Triage:
     received_at: str
     decided_at: str | None
     report: object
+    reviewers: tuple[str, ...]
+    actions: tuple[Action, ...]
 
 
 def _field[T](data: dict[str, object], key: str, kind: type[T]) -> T:
@@ -301,12 +313,14 @@ class TriageStore:
         decided = decided_at.astimezone(UTC).isoformat(timespec="milliseconds")
         with self._lock, self._connection:
             cursor = self._connection.execute(
-                UPDATE_DECISION, (status, note, decided, triage.id, triage.received_at)
+                UPDATE_DECISION, (status, note, decided, triage.id, triage.status)
             )
         return cursor.rowcount == 1
 
     @staticmethod
     def _triage(row: sqlite3.Row) -> Triage:
+        report = json.loads(row["payload"])
+        stored = report.get("suggested_reviewers") if isinstance(report, dict) else None
         return Triage(
             id=row["id"],
             repo=row["repo"],
@@ -315,7 +329,13 @@ class TriageStore:
             note=row["note"],
             received_at=row["received_at"],
             decided_at=row["decided_at"],
-            report=json.loads(row["payload"]),
+            report=report,
+            reviewers=tuple(
+                name
+                for name in (stored if isinstance(stored, list) else [])
+                if isinstance(name, str) and REVIEWER_PATTERN.fullmatch(name)
+            ),
+            actions=ALLOWED_ACTIONS.get(row["status"], ()),
         )
 
     def close(self) -> None:
@@ -347,7 +367,7 @@ def run_gh(arguments: list[str], stdin: str) -> None:
         )
     except subprocess.TimeoutExpired as error:
         raise GhFailed(
-            f"gh が {GH_TIMEOUT_SECONDS} 秒で終わらなかった。GitHub で結果を確かめてから押し直す"
+            f"gh が {GH_TIMEOUT_SECONDS} 秒で終わらなかった。どうなったかは GitHub で確かめる"
         ) from error
     except OSError as error:
         raise GhFailed(f"gh を実行できなかった: {error}") from error
@@ -355,55 +375,58 @@ def run_gh(arguments: list[str], stdin: str) -> None:
         raise GhFailed(completed.stderr.strip() or f"gh が {completed.returncode} で終わった")
 
 
-def parse_reason(body: bytes) -> str:
+def parse_decision_request(body: bytes) -> DecisionRequest:
     raw = load_json(body, InvalidReason)
-    reason = raw.get("reason", "") if isinstance(raw, dict) else None
-    if not isinstance(reason, str):
-        raise InvalidReason("reason は文字列で送る")
-    return reason
+    if not isinstance(raw, dict):
+        raise InvalidReason("判断の本文は JSON のオブジェクトで送る")
+    seen = raw.get("seen")
+    reason = raw.get("reason", "")
+    if not isinstance(seen, str) or not isinstance(reason, str):
+        raise InvalidReason("seen(見た報告の受信日時)と reason は文字列で送る")
+    return DecisionRequest(seen=seen, reason=reason)
 
 
-def decide(store: TriageStore, gh: RunGh, triage_id: int, action: Action, reason: str) -> Decision:
+def decide(
+    store: TriageStore, gh: RunGh, triage_id: int, action: Action, request: DecisionRequest
+) -> Decision:
     triage = store.find(triage_id)
     if triage is None:
         raise TriageNotFound("その PR は見つからない")
-    if triage.status not in DECIDABLE_STATUSES:
-        raise AlreadyDecided("この PR はもう判断してある")
+    if action not in triage.actions:
+        raise AlreadyDecided("この PR にはもうその判断をできない")
+    if triage.received_at != request.seen:
+        raise ReportChanged("新しい報告が届いている。読み直してから判断する")
     target = [str(triage.number), "-R", triage.repo]
-    warning = ""
+    warnings = []
     match action:
         case Action.REQUEST_REVIEW:
             gh(["pr", "ready", *target], "")
-            stored = (
-                triage.report.get("suggested_reviewers")
-                if isinstance(triage.report, dict)
-                else None
-            )
-            reviewers = [
-                name
-                for name in (stored if isinstance(stored, list) else [])
-                if isinstance(name, str) and REVIEWER_PATTERN.fullmatch(name)
-            ]
-            if reviewers:
+            if triage.reviewers:
                 try:
-                    gh(["pr", "edit", *target, "--add-reviewer", ",".join(reviewers)], "")
+                    gh(["pr", "edit", *target, "--add-reviewer", ",".join(triage.reviewers)], "")
                 except GhFailed as error:
-                    warning = f"Ready にしたが、レビュアーを付けられなかった: {error}"
+                    warnings.append(
+                        "Ready にしたが、レビュアーを付けられなかった。"
+                        f"GitHub の PR で付ける({error})"
+                    )
             status, note = "requested", None
         case Action.RETURN:
-            if not reason.strip() or len(reason) > MAX_REASON_LENGTH:
+            if not request.reason.strip() or len(request.reason) > MAX_REASON_LENGTH:
                 raise InvalidReason(f"差し戻す理由は 1〜{MAX_REASON_LENGTH} 字で書く")
-            gh(["pr", "comment", *target, "--body-file", "-"], reason)
-            status, note = "returned", reason
+            gh(["pr", "comment", *target, "--body-file", "-"], request.reason)
+            status, note = "returned", request.reason
         case Action.HOLD:
             status, note = "on_hold", None
         case _:
             assert_never(action)
-    if not store.decide(triage, status, note, datetime.now(UTC)):
-        raise ReportChanged(
-            "判断のあいだに新しい報告が届いたので、状態は変えていない。読み直してから判断する"
+    current = store.find(triage_id)
+    if current is not None and current.received_at != triage.received_at:
+        warnings.append(
+            "判断のあいだに新しい報告が届いた。判断はそのまま記録したので、新しい報告を確かめる"
         )
-    return Decision(status, warning)
+    if not store.decide(triage, status, note, datetime.now(UTC)):
+        raise AlreadyDecided("判断のあいだに状態が変わった")
+    return Decision(status, " ".join(warnings))
 
 
 def import_inbox(inbox: Path, store: TriageStore) -> int:
@@ -507,9 +530,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if body is None:
             return
         try:
-            reason = parse_reason(body)
+            request = parse_decision_request(body)
             with self.server.decision_lock:
-                decision = decide(self.server.store, self.server.gh, triage_id, action, reason)
+                decision = decide(self.server.store, self.server.gh, triage_id, action, request)
         except DecisionError as error:
             self._reject(DECISION_ERROR_STATUSES[type(error)], str(error))
             return

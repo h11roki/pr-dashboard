@@ -43,7 +43,7 @@ def test_tells_to_check_github_when_gh_takes_too_long(
     put_gh_on_path(tmp_path, monkeypatch, "sleep 5")
     monkeypatch.setattr(server, "GH_TIMEOUT_SECONDS", 1)
 
-    with pytest.raises(GhFailed, match="GitHub で結果を確かめて"):
+    with pytest.raises(GhFailed, match="GitHub で確かめる"):
         run_gh(["pr", "comment", "128", "-R", "acme/web", "--body-file", "-"], "理由")
 
 
