@@ -25,7 +25,7 @@
 | 対象 | 前 | 後 |
 |---|---|---|
 | リポジトリ | `h11roki/pr-dashboard` | `h11roki/toriage` |
-| 手元のディレクトリ | `~/private/myprojects/pr-dashboard` | `~/private/myprojects/toriage` |
+| 手元の clone のディレクトリ | `pr-dashboard` | `toriage` |
 | プラグイン | `pr-dashboard@h11roki` | `toriage@h11roki`(marketplace の名前 `h11roki` は変えない) |
 | スキル | `/pr-dashboard:report`、`/pr-dashboard:open` | `/toriage:report`、`/toriage:open` |
 | コマンド | `pr-dashboard-report`、`pr-dashboard-start` | `toriage-report`、`toriage-start` |
@@ -35,7 +35,7 @@
 | 画面の題 | PRトリアージ | toriage |
 
 - 0001〜0008 の本文は書き換えず、そこに出てくる古い名前は上の表で読み替える
-- 古い名前の環境変数とデータの場所は読まない。入れていた人は、データを一度だけ手で移す
+- 古い名前の環境変数とデータの場所は読まない。入れていた人は一度だけ手で移る。古いプラグイン `pr-dashboard@h11roki` を外し、動いている古いサーバーを止めてから、`~/.local/share/pr-dashboard` を `~/.local/share/toriage` に移す
 
 ## 理由
 
