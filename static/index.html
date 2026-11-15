@@ -458,7 +458,7 @@
     </div>
     <div class="decision" hidden>
       <p class="decision-text"></p>
-      <textarea class="reason" rows="3" aria-label="差し戻す理由" placeholder="直してほしいことを書く(PR にコメントします)"></textarea>
+      <textarea class="reason" rows="3" aria-label="差し戻す理由" placeholder="直してほしいことを書く(PR を作った Claude に渡します)"></textarea>
       <div class="decision-buttons">
         <button type="button" class="button" data-cancel>やめる</button>
         <button type="button" class="button primary" data-confirm></button>
@@ -488,7 +488,7 @@
     },
     return: {
       label: "差し戻す",
-      text: () => "理由を PR にコメントし、差し戻しにします。",
+      text: () => "PR を作った Claude の会話を裏で再開し、理由を渡して直してもらいます。PR にはコメントしません。",
     },
   };
   const receivedFormat = new Intl.DateTimeFormat("ja-JP", {
