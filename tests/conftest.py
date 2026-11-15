@@ -1,9 +1,10 @@
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
-from server import TriageStore
+from server import ROOT, DashboardServer, TriageStore
 
 
 @pytest.fixture
@@ -35,3 +36,14 @@ def store(tmp_path: Path) -> Iterator[TriageStore]:
     store = TriageStore(tmp_path / "prs.db")
     yield store
     store.close()
+
+
+@pytest.fixture
+def port(store: TriageStore) -> Iterator[int]:
+    server = DashboardServer(0, store, ROOT / "static" / "index.html")
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    yield server.server_port
+    server.shutdown()
+    thread.join()
+    server.server_close()
