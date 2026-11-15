@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+import server
 from server import GhFailed, run_gh
 
 
@@ -34,6 +35,16 @@ def test_reports_what_gh_said_when_it_fails(
 
     with pytest.raises(GhFailed, match="404"):
         run_gh(["pr", "ready", "128", "-R", "acme/web"], "")
+
+
+def test_tells_to_check_github_when_gh_takes_too_long(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    put_gh_on_path(tmp_path, monkeypatch, "sleep 5")
+    monkeypatch.setattr(server, "GH_TIMEOUT_SECONDS", 1)
+
+    with pytest.raises(GhFailed, match="GitHub で結果を確かめて"):
+        run_gh(["pr", "comment", "128", "-R", "acme/web", "--body-file", "-"], "理由")
 
 
 def test_reports_that_gh_is_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

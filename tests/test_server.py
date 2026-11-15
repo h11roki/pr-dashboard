@@ -1,7 +1,10 @@
 import json
 import socket
+import sqlite3
+from contextlib import closing
 from datetime import UTC, datetime
 from http.client import HTTPConnection
+from pathlib import Path
 
 import pytest
 
@@ -9,8 +12,11 @@ from server import (
     HOST,
     MAX_BODY_BYTES,
     MAX_REASON_LENGTH,
+    Action,
     DashboardHandler,
+    ReportChanged,
     TriageStore,
+    decide,
     parse_report,
 )
 
@@ -200,7 +206,7 @@ def test_requesting_a_review_marks_the_pr_ready(
     status, body = post_decision(port, triage_id, "request-review", {})
 
     assert status == 200
-    assert json.loads(body) == {"status": "requested"}
+    assert json.loads(body) == {"status": "requested", "warning": ""}
     assert gh_calls == [(["pr", "ready", "128", "-R", "acme/web"], "")]
     assert status_of(store, triage_id) == "requested"
 
@@ -264,15 +270,62 @@ def test_holding_changes_only_the_status_and_can_be_decided_later(
 
 
 def test_a_failing_gh_leaves_the_status_alone(
-    port: int, store: TriageStore, report: dict[str, object], gh_failure: list[str]
+    port: int, store: TriageStore, report: dict[str, object], gh_failures: dict[str, str]
 ) -> None:
     triage_id = save_pending(store, report)
-    gh_failure.append("HTTP 404: Not Found")
+    gh_failures["ready"] = "HTTP 404: Not Found"
 
     status, body = post_decision(port, triage_id, "request-review", {})
 
     assert status == 502
     assert "404" in json.loads(body)["error"]
+    assert status_of(store, triage_id) == "pending"
+
+
+def test_a_reviewer_that_cannot_be_added_only_warns(
+    port: int, store: TriageStore, report: dict[str, object], gh_failures: dict[str, str]
+) -> None:
+    triage_id = save_pending(store, report | {"suggested_reviewers": ["h11roki"]})
+    gh_failures["edit"] = "Review cannot be requested from pull request author."
+
+    status, body = post_decision(port, triage_id, "request-review", {})
+
+    assert status == 200
+    assert "author" in json.loads(body)["warning"]
+    assert status_of(store, triage_id) == "requested"
+
+
+def test_a_stored_reviewer_that_no_longer_passes_is_skipped(
+    tmp_path: Path,
+    port: int,
+    store: TriageStore,
+    report: dict[str, object],
+    gh_calls: list[tuple[list[str], str]],
+) -> None:
+    triage_id = save_pending(store, report)
+    with closing(sqlite3.connect(tmp_path / "prs.db")) as old, old:
+        old.execute(
+            "UPDATE prs SET payload = json_set(payload, '$.suggested_reviewers', json(?))",
+            (json.dumps(["@alice", "bob"]),),
+        )
+
+    status, _ = post_decision(port, triage_id, "request-review", {})
+
+    assert status == 200
+    assert gh_calls[1][0][-1] == "bob"
+
+
+def test_a_report_that_arrives_during_a_decision_is_not_overwritten(
+    store: TriageStore, report: dict[str, object]
+) -> None:
+    triage_id = save_pending(store, report)
+
+    def gh_while_a_new_report_arrives(arguments: list[str], stdin: str) -> None:
+        store.save(parse_report(report | {"title": "直した題"}), datetime.now(UTC))
+
+    with pytest.raises(ReportChanged):
+        decide(store, gh_while_a_new_report_arrives, triage_id, Action.RETURN, "直して")
+
     assert status_of(store, triage_id) == "pending"
 
 
