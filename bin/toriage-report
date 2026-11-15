@@ -29,11 +29,14 @@ jq -e -s 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1 <<<"$judgme
 facts="$(gh pr view "$1" --json number,url,title,headRefName,additions,deletions,changedFiles)" ||
   fail "gh で PR $1 を読めなかった"
 
-body="$(jq -c --argjson facts "$facts" \
-  --arg session_id "${CLAUDE_CODE_SESSION_ID:-}" --arg workdir "$PWD" '
+branch="$(git branch --show-current 2>/dev/null)" || branch=""
+workdir="$(git rev-parse --show-toplevel 2>/dev/null)" || workdir=""
+
+body="$(jq -c --argjson facts "$facts" --arg session_id "${CLAUDE_CODE_SESSION_ID:-}" \
+  --arg branch "$branch" --arg workdir "$workdir" '
   . + {
     session: (
-      if $session_id | test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+      if $session_id != "" and $workdir != "" and $branch == $facts.headRefName
       then {id: $session_id, workdir: $workdir}
       else null
       end
