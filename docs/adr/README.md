@@ -48,3 +48,4 @@
 | [0007](0007-decision-buttons.md) | 判断のボタンはサーバーから gh を -R 付きで呼び、失敗したら判断の状態を変えない | 承認 |
 | [0008](0008-claude-code-plugin.md) | Claude Code のプラグインとして配り、Claude Code を開いたときにダッシュボードを起動する | 承認 |
 | [0009](0009-name-toriage.md) | 名前を toriage にする | 承認 |
+| [0010](0010-server-stops-itself.md) | 起動し直すときは、サーバーに自分で止まってもらう | 承認 |
