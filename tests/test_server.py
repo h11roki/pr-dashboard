@@ -1,11 +1,14 @@
 import json
+import socket
 import threading
 from collections.abc import Iterator
 from http.client import HTTPConnection
 
 import pytest
 
-from server import HOST, MAX_BODY_BYTES, ROOT, DashboardServer, TriageStore
+from server import HOST, MAX_BODY_BYTES, ROOT, DashboardHandler, DashboardServer, TriageStore
+
+CLIENT_TIMEOUT_SECONDS = 5
 
 
 @pytest.fixture
@@ -26,7 +29,7 @@ def send(
     body: bytes | None = None,
     headers: dict[str, str] | None = None,
 ) -> tuple[int, bytes]:
-    connection = HTTPConnection(HOST, port)
+    connection = HTTPConnection(HOST, port, timeout=CLIENT_TIMEOUT_SECONDS)
     connection.request(method, path, body, headers or {})
     response = connection.getresponse()
     result = response.status, response.read()
@@ -98,6 +101,35 @@ def test_explains_why_a_report_is_invalid(port: int, report: dict[str, object]) 
 
     assert status == 400
     assert "risk" in json.loads(body)["error"]
+
+
+def start_stalled_upload(port: int) -> socket.socket:
+    stalled = socket.create_connection((HOST, port), timeout=CLIENT_TIMEOUT_SECONDS)
+    stalled.sendall(
+        (
+            "POST /api/prs HTTP/1.1\r\n"
+            f"Host: {HOST}:{port}\r\n"
+            "Content-Type: application/json\r\n"
+            "Content-Length: 100\r\n\r\n{"
+        ).encode()
+    )
+    return stalled
+
+
+def test_a_stalled_upload_does_not_block_the_list(port: int) -> None:
+    with start_stalled_upload(port):
+        status, _ = send(port, "GET", "/api/prs")
+
+    assert status == 200
+
+
+def test_a_stalled_upload_times_out(port: int, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(DashboardHandler, "timeout", 0.2)
+
+    with start_stalled_upload(port) as stalled:
+        response = stalled.recv(1024)
+
+    assert response.startswith(b"HTTP/1.0 408")
 
 
 def test_answers_deeply_nested_json_with_an_error(port: int) -> None:

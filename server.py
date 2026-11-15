@@ -2,11 +2,12 @@ import json
 import re
 import sqlite3
 import sys
+import threading
 from contextlib import suppress
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -14,6 +15,7 @@ ROOT = Path(__file__).resolve().parent
 HOST = "127.0.0.1"
 PORT = 8787
 MAX_BODY_BYTES = 64 * 1024
+REQUEST_TIMEOUT_SECONDS = 10
 MAX_SUMMARY_LINES = 3
 MAX_PR_NUMBER = 2**31 - 1
 REPO_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/(?!\.{1,2}$)[A-Za-z0-9._][A-Za-z0-9._-]*")
@@ -199,18 +201,20 @@ class TriageStore:
         self._connection = sqlite3.connect(path, check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
         self._connection.execute(SCHEMA)
+        self._lock = threading.Lock()
 
     def save(self, report: Report) -> int:
         payload = json.dumps(asdict(report), ensure_ascii=False)
         received_at = datetime.now(UTC).isoformat()
-        with self._connection:
+        with self._lock, self._connection:
             row = self._connection.execute(
                 UPSERT, (report.repo, report.number, payload, received_at)
             ).fetchone()
         return int(row["id"])
 
     def list_triages(self, status: str | None) -> list[Triage]:
-        rows = self._connection.execute(SELECT, (status, status)).fetchall()
+        with self._lock:
+            rows = self._connection.execute(SELECT, (status, status)).fetchall()
         return [
             Triage(
                 id=row["id"],
@@ -241,11 +245,11 @@ def import_inbox(inbox: Path, store: TriageStore) -> int:
     return imported
 
 
-class DashboardServer(HTTPServer):
+class DashboardServer(ThreadingHTTPServer):
     def __init__(self, port: int, store: TriageStore, page: Path) -> None:
         super().__init__((HOST, port), DashboardHandler)
         self.store = store
-        self.page = page
+        self.page = page.read_bytes()
         self.allowed_hosts = frozenset(
             {f"{HOST}:{self.server_port}", f"localhost:{self.server_port}"}
         )
@@ -254,13 +258,14 @@ class DashboardServer(HTTPServer):
 
 class DashboardHandler(BaseHTTPRequestHandler):
     server: DashboardServer
+    timeout = REQUEST_TIMEOUT_SECONDS
 
     def do_GET(self) -> None:
         url = urlsplit(self.path)
         if not self._is_local_request():
             self._reject(HTTPStatus.FORBIDDEN, "ほかのサイトからの要求は受け付けない")
         elif url.path == "/":
-            self._send(HTTPStatus.OK, "text/html; charset=utf-8", self.server.page.read_bytes())
+            self._send(HTTPStatus.OK, "text/html; charset=utf-8", self.server.page)
         elif url.path == "/api/prs":
             self._send_triages(url.query)
         else:
@@ -288,7 +293,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if int(length) > MAX_BODY_BYTES:
             self._reject(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, f"本文は {MAX_BODY_BYTES} バイトまで")
             return
-        body = self.rfile.read(int(length))
+        try:
+            body = self.rfile.read(int(length))
+        except TimeoutError:
+            self._reject(HTTPStatus.REQUEST_TIMEOUT, "本文が届かない")
+            return
         if self.headers.get_content_type() != "application/json":
             self._reject(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "本文は application/json で送る")
             return
