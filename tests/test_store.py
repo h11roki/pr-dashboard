@@ -1,5 +1,9 @@
 import json
+import sqlite3
+from contextlib import closing
 from pathlib import Path
+
+import pytest
 
 from server import TriageStore, import_inbox, parse_report
 
@@ -23,6 +27,26 @@ def test_resending_a_pr_overwrites_its_report(
     assert second == first
     [triage] = store.list_triages(None)
     assert triage.report == report
+
+
+@pytest.mark.parametrize(
+    ("decided", "after_resend"),
+    [("returned", "pending"), ("on_hold", "on_hold"), ("requested", "requested")],
+)
+def test_resending_brings_only_a_returned_pr_back_to_pending(
+    tmp_path: Path, store: TriageStore, report: dict[str, object], decided: str, after_resend: str
+) -> None:
+    store.save(parse_report(report))
+    with closing(sqlite3.connect(tmp_path / "prs.db")) as decider, decider:
+        decider.execute(
+            "UPDATE prs SET status = ?, decided_at = '2026-11-15T00:00:00+00:00'", (decided,)
+        )
+
+    store.save(parse_report(report))
+
+    [triage] = store.list_triages(None)
+    assert triage.status == after_resend
+    assert (triage.decided_at is None) == (after_resend == "pending")
 
 
 def test_the_latest_report_comes_first(store: TriageStore, report: dict[str, object]) -> None:

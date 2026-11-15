@@ -53,7 +53,9 @@ UPSERT = """
 INSERT INTO prs (repo, number, payload, received_at) VALUES (?, ?, ?, ?)
 ON CONFLICT (repo, number) DO UPDATE SET
     payload = excluded.payload,
-    received_at = excluded.received_at
+    received_at = excluded.received_at,
+    status = CASE status WHEN 'returned' THEN 'pending' ELSE status END,
+    decided_at = CASE status WHEN 'returned' THEN NULL ELSE decided_at END
 RETURNING id
 """
 
