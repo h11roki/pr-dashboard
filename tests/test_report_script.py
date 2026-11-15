@@ -6,10 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from server import HOST, ROOT, TriageStore
+from server import HOST, ROOT, Session, TriageStore
 
 SCRIPT = ROOT / "bin" / "toriage-report"
 REFUSED = f"http://{HOST}:1"
+SESSION_ID = "07805e44-cede-43f0-b5dd-4a9ae6541ad5"
 FACTS_FROM_GH = ("repo", "number", "url", "title", "branch", "changes")
 GH_PR_VIEW = {
     "number": 128,
@@ -41,21 +42,29 @@ def judgment_of(report: dict[str, object]) -> dict[str, object]:
 
 
 def run_script(
-    bin_dir: Path, judgment: str, dashboard: str | None, home: Path, *args: str
+    bin_dir: Path,
+    judgment: str,
+    dashboard: str | None,
+    home: Path,
+    *args: str,
+    session_id: str | None = None,
+    cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ | {
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "TORIAGE_HOME": str(home),
     }
-    environment.pop("TORIAGE_URL", None)
-    if dashboard is not None:
-        environment["TORIAGE_URL"] = dashboard
+    for name, value in (("TORIAGE_URL", dashboard), ("CLAUDE_CODE_SESSION_ID", session_id)):
+        environment.pop(name, None)
+        if value is not None:
+            environment[name] = value
     return subprocess.run(
         [str(SCRIPT), *args],
         input=judgment,
         capture_output=True,
         text=True,
         env=environment,
+        cwd=cwd,
         check=False,
         timeout=30,
     )
@@ -72,6 +81,41 @@ def test_sends_the_judgment_with_the_facts_from_gh(
     assert "acme/web#128" in result.stdout
     [triage] = store.list_triages()
     assert triage.report == report
+
+
+def test_attaches_the_claude_code_session_it_runs_in(
+    tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
+) -> None:
+    workdir = tmp_path / "worktree"
+    workdir.mkdir()
+
+    result = run_script(
+        fake_gh,
+        json.dumps(judgment_of(report)),
+        f"http://{HOST}:{port}",
+        tmp_path / "home",
+        "128",
+        session_id=SESSION_ID,
+        cwd=workdir,
+    )
+
+    assert result.returncode == 0, result.stderr
+    [triage] = store.list_triages()
+    assert triage.session == Session(id=SESSION_ID, workdir=str(workdir.resolve()))
+
+
+def test_does_not_take_the_session_from_the_judgment(
+    tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
+) -> None:
+    judgment = judgment_of(report) | {"session": {"id": SESSION_ID, "workdir": "/elsewhere"}}
+
+    result = run_script(
+        fake_gh, json.dumps(judgment), f"http://{HOST}:{port}", tmp_path / "home", "128"
+    )
+
+    assert result.returncode == 0, result.stderr
+    [triage] = store.list_triages()
+    assert triage.session is None
 
 
 def test_keeps_the_report_in_the_inbox_when_the_dashboard_is_down(
