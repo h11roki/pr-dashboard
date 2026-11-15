@@ -481,7 +481,7 @@ def resume_in_background(logs: Path) -> ResumeSession:
                             prompt,
                         ],
                         cwd=session.workdir,
-                        env=_resume_environment(),
+                        env=_resume_environment(session.workdir),
                         stdin=subprocess.DEVNULL,
                         stdout=output,
                         stderr=subprocess.STDOUT,
@@ -500,7 +500,7 @@ def resume_in_background(logs: Path) -> ResumeSession:
     return resume
 
 
-def _resume_environment() -> dict[str, str]:
+def _resume_environment(workdir: str) -> dict[str, str]:
     environment = {
         name: value for name, value in os.environ.items() if name not in INHERITED_SESSION_VARIABLES
     }
@@ -509,8 +509,8 @@ def _resume_environment() -> dict[str, str]:
             directory
             for directory in environment["PATH"].split(os.pathsep)
             if not (
-                (Path(directory) / REPORT_COMMAND).is_file()
-                and (Path(directory).parent / PLUGIN_MANIFEST).is_file()
+                (Path(workdir, directory) / REPORT_COMMAND).is_file()
+                and (Path(workdir, directory).parent / PLUGIN_MANIFEST).is_file()
             )
         )
     return environment
