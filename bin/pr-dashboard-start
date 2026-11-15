@@ -16,8 +16,9 @@ running() {
 
 if [ "${1:-}" = "--restart" ]; then
   pid="$(cat "$home/server.pid" 2>/dev/null)" || pid=""
-  if [ -n "$pid" ] && ps -p "$pid" -o command= | grep -q 'pr-dashboard.*/server\.py'; then
-    kill "$pid"
+  command_line="$(ps -p "$pid" -o command= 2>/dev/null)" || command_line=""
+  if [[ "$command_line" == *pr-dashboard*/server.py* ]]; then
+    kill "$pid" 2>/dev/null || true
   fi
   deadline=$((SECONDS + 5))
   while running && [ "$SECONDS" -lt "$deadline" ]; do
@@ -33,7 +34,8 @@ if running; then
 fi
 
 mkdir -p "$home"
-nohup "$root/libexec/pr-dashboard-python" -I "$root/server.py" \
+cd "$home"
+env -u GH_TOKEN -u GITHUB_TOKEN nohup "$root/libexec/pr-dashboard-python" -I -u "$root/server.py" \
   >>"$home/server.log" 2>&1 </dev/null &
 launched=$!
 deadline=$((SECONDS + 10))

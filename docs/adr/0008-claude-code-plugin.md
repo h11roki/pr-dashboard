@@ -31,6 +31,7 @@
 
 - リポジトリのルートをプラグイン(名前は `pr-dashboard`)にし、`.claude-plugin/marketplace.json`(名前は `h11roki`)で配る。入れ方は `/plugin marketplace add h11roki/pr-dashboard` と `/plugin install pr-dashboard@h11roki`
 - `bin/pr-dashboard-start`: 8787 番に何もいなければ、サーバーを `nohup` で裏に起動する。何度呼んでも 1 つだけ動く。`--restart` で止めてから起動し直す
+- サーバーはデータの置き場所を作業ディレクトリにし、`GH_TOKEN` と `GITHUB_TOKEN` を外して起動する。起動したセッションの作業ディレクトリ(あとで消える worktree)や、そのディレクトリだけのトークンを引き継がず、いつも `gh auth login` のアカウントで GitHub を操作する
 - `hooks/hooks.json`: SessionStart で `pr-dashboard-start` を呼ぶ。標準出力には何も出さない(Claude の文脈に入るため)
 - `bin/pr-dashboard-report`: これまでの `scripts/report-pr.sh`。送り先を指定していないときは、つながらなければ `pr-dashboard-start` で起動してから送り直し、それでもだめなら inbox に置く
 - スキル `report`(`/pr-dashboard:report`): 判断材料の JSON の書き方と送り方。どの PR の手順からも呼べるようにし、pr-review-fix の手順 7 はこのスキルに従う形にする
@@ -52,6 +53,7 @@
 - プラグインを更新しても、動いているサーバーは古いコードのまま。`pr-dashboard-start --restart` で起動し直す
 - データはプラグインを消しても残る。消すときは手で消す
 - これまで `data/` にあったデータは、新しい場所に一度だけ手で移す
+- 環境変数のトークンだけで `gh` を使っている人は、`gh auth login` をしないとボタンが使えない
 
 ## 再検討する条件
 
