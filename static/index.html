@@ -473,13 +473,12 @@
     failed: { label: "テスト 失敗", tone: "bad" },
     not_run: { label: "テスト 未実行", tone: "warn" },
   };
-  const DECIDABLE_STATUSES = new Set(["pending", "on_hold"]);
   const CONFIRMATIONS = {
     "request-review": {
       label: "レビューに出す",
-      text: (report) =>
-        report.suggested_reviewers.length
-          ? `Draft を外し、${report.suggested_reviewers.join("、")} にレビューを頼みます。`
+      text: (triage) =>
+        triage.reviewers.length
+          ? `Draft を外し、${triage.reviewers.join("、")} にレビューを頼みます。`
           : "Draft を外して Ready にします。レビュアーの候補はいません。",
     },
     return: {
@@ -507,7 +506,7 @@
   let lastResponse = "";
   let loadError = "";
   let groupByProject = true;
-  let decisionsRunning = 0;
+  const runningDecisions = new Set();
   let renderWaiting = false;
   const expanded = new Map();
   const collapsedProjects = new Set();
@@ -617,17 +616,19 @@
     const response = await fetch(`/api/prs/${triage.id}/${action}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reason }),
+      body: JSON.stringify({ seen: triage.received_at, reason }),
     });
     if (!response.ok) {
       const problem = await response.json().catch(() => ({}));
-      throw new Error(problem.error ?? `HTTP ${response.status}`);
+      throw Object.assign(new Error(problem.error ?? `HTTP ${response.status}`), {
+        status: response.status,
+      });
     }
     return response.json();
   }
 
   function renderUnlessEditing() {
-    if (decisionsRunning > 0 || cards.querySelector(".decision:not([hidden])")) {
+    if (runningDecisions.size > 0 || cards.querySelector(".decision:not([hidden])")) {
       renderWaiting = true;
       return;
     }
@@ -640,14 +641,16 @@
     const reason = panel.querySelector(".reason");
     const confirm = panel.querySelector("[data-confirm]");
     const error = card.querySelector(".decision-error");
-    if (!DECIDABLE_STATUSES.has(triage.status)) {
+    if (triage.actions.length === 0) {
       actions.remove();
       panel.remove();
       error.remove();
       return;
     }
-    if (triage.status === "on_hold") {
-      actions.querySelector('[data-action="hold"]').remove();
+    for (const button of actions.querySelectorAll("button")) {
+      if (!triage.actions.includes(button.dataset.action)) {
+        button.remove();
+      }
     }
 
     function setBusy(busy) {
@@ -660,21 +663,32 @@
       setBusy(true);
       error.hidden = true;
       notice.hidden = true;
-      decisionsRunning += 1;
+      runningDecisions.add(triage.id);
       try {
         const decision = await postDecision(triage, action, reason.value);
         panel.hidden = true;
         notice.textContent = decision.warning;
         notice.hidden = decision.warning === "";
       } catch (problem) {
-        error.textContent = `できませんでした: ${problem.message}`;
-        error.hidden = false;
-        setBusy(false);
-        return;
+        const text = `できませんでした: ${problem.message}`;
+        if (problem.status !== 409 && card.isConnected) {
+          error.textContent = text;
+          error.hidden = false;
+          setBusy(false);
+          return;
+        }
+        panel.hidden = true;
+        notice.textContent = text;
+        notice.hidden = false;
+        renderWaiting = true;
       } finally {
-        decisionsRunning -= 1;
+        runningDecisions.delete(triage.id);
       }
       await refresh();
+    }
+
+    if (runningDecisions.has(triage.id)) {
+      setBusy(true);
     }
 
     for (const button of actions.querySelectorAll("button")) {
@@ -685,7 +699,7 @@
           return;
         }
         panel.dataset.action = action;
-        setText(panel, ".decision-text", CONFIRMATIONS[action].text(triage.report));
+        setText(panel, ".decision-text", CONFIRMATIONS[action].text(triage));
         confirm.textContent = CONFIRMATIONS[action].label;
         reason.hidden = action !== "return";
         error.hidden = true;
