@@ -169,8 +169,9 @@
     color: var(--destructive);
   }
 
-  .cards { display: grid; gap: 16px; }
-  .cards:has(> .project) { gap: 28px; }
+  .card-list { display: grid; gap: 16px; }
+  .project-list { display: grid; gap: 28px; }
+  .project .repo-name { display: none; }
   .project-header {
     display: flex;
     align-items: center;
@@ -342,7 +343,7 @@
     </div>
   </div>
   <p id="message" class="message" role="status" data-kind="loading">読み込み中…</p>
-  <div id="cards" class="cards"></div>
+  <div id="cards" class="card-list"></div>
 </div>
 <template id="project-template">
   <details class="project" open>
@@ -351,13 +352,13 @@
       <span class="project-title"><span class="project-owner"></span><span class="project-name"></span></span>
       <span class="project-count"></span>
     </summary>
-    <div class="project-cards cards"></div>
+    <div class="project-cards card-list"></div>
   </details>
 </template>
 <template id="card-template">
   <details class="card">
     <summary class="card-header">
-      <span class="card-description repo"></span>
+      <span class="card-description"><span class="repo-name"></span> <span class="number"></span></span>
       <span class="card-action">
         <span class="badge risk"><span class="dot"></span><span class="label"></span></span>
         <span class="badge tests"><span class="dot"></span><span class="label"></span></span>
@@ -422,9 +423,18 @@
   let latestRequest = 0;
   let lastResponse = "";
   let loadError = "";
-  let groupByProject = readGrouping();
+  let groupByProject = true;
   const expanded = new Map();
   const collapsedProjects = new Set();
+
+  function applyGrouping(value) {
+    groupByProject = value;
+    groupSwitch.setAttribute("aria-checked", String(value));
+  }
+
+  function projectKey(repo) {
+    return `${selectedStatus} ${repo}`;
+  }
 
   function readGrouping() {
     try {
@@ -469,9 +479,12 @@
     const card = template.content.firstElementChild.cloneNode(true);
     const { report } = triage;
     const { changes } = report;
-    card.open = open;
-    card.addEventListener("toggle", () => expanded.set(triage.id, card.open));
-    setText(card, ".repo", `${report.repo} #${report.number}`);
+    card.open = expanded.get(triage.id) ?? open;
+    card.querySelector(".card-header").addEventListener("click", () => {
+      expanded.set(triage.id, !card.open);
+    });
+    setText(card, ".repo-name", report.repo);
+    setText(card, ".number", `#${report.number}`);
     setText(card, ".title", report.title);
     setText(
       card,
@@ -497,13 +510,14 @@
 
   function renderProject(repo, projectCards) {
     const project = projectTemplate.content.firstElementChild.cloneNode(true);
+    const key = projectKey(repo);
     const slash = repo.indexOf("/");
-    project.open = !collapsedProjects.has(repo);
-    project.addEventListener("toggle", () => {
+    project.open = !collapsedProjects.has(key);
+    project.querySelector(".project-header").addEventListener("click", () => {
       if (project.open) {
-        collapsedProjects.delete(repo);
+        collapsedProjects.add(key);
       } else {
-        collapsedProjects.add(repo);
+        collapsedProjects.delete(key);
       }
     });
     setText(project, ".project-owner", repo.slice(0, slash + 1));
@@ -513,6 +527,23 @@
     return project;
   }
 
+  function renderProjects(shown) {
+    const projects = new Map();
+    for (const triage of shown) {
+      const repo = triage.report.repo;
+      if (!projects.has(repo)) {
+        projects.set(repo, []);
+      }
+      projects.get(repo).push(triage);
+    }
+    const repos = [...projects.keys()].sort((a, b) => a.localeCompare(b));
+    const firstOpenRepo = repos.find((repo) => !collapsedProjects.has(projectKey(repo)));
+    const firstOpen = firstOpenRepo && projects.get(firstOpenRepo)[0];
+    return repos.map((repo) =>
+      renderProject(repo, projects.get(repo).map((triage) => renderCard(triage, triage === firstOpen))),
+    );
+  }
+
   function render() {
     for (const tab of tabs) {
       const status = tab.dataset.status;
@@ -520,16 +551,12 @@
       tab.querySelector(".count").textContent = triages.filter((t) => t.status === status).length;
     }
     const shown = triages.filter((triage) => triage.status === selectedStatus);
-    const firstId = shown[0]?.id;
-    const cardFor = (triage) => renderCard(triage, expanded.get(triage.id) ?? triage.id === firstId);
-    if (groupByProject) {
-      const projects = Map.groupBy(shown, (triage) => triage.report.repo);
-      cards.replaceChildren(
-        ...[...projects].map(([repo, items]) => renderProject(repo, items.map(cardFor))),
-      );
-    } else {
-      cards.replaceChildren(...shown.map(cardFor));
-    }
+    cards.className = groupByProject ? "project-list" : "card-list";
+    cards.replaceChildren(
+      ...(groupByProject
+        ? renderProjects(shown)
+        : shown.map((triage) => renderCard(triage, triage === shown[0]))),
+    );
     if (loadError) {
       setMessage("error", `読み込めませんでした: ${loadError}`);
     } else {
@@ -567,10 +594,9 @@
       render();
     });
   }
-  groupSwitch.setAttribute("aria-checked", String(groupByProject));
+  applyGrouping(readGrouping());
   groupSwitch.addEventListener("click", () => {
-    groupByProject = !groupByProject;
-    groupSwitch.setAttribute("aria-checked", String(groupByProject));
+    applyGrouping(!groupByProject);
     rememberGrouping();
     render();
   });
