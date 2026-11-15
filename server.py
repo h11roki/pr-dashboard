@@ -240,18 +240,26 @@ class TriageStore:
         self._connection.close()
 
 
+def parse_body(body: bytes) -> Report:
+    if len(body) > MAX_BODY_BYTES:
+        raise InvalidReport(f"本文は {MAX_BODY_BYTES} バイトまで")
+    try:
+        raw = json.loads(body)
+    except (ValueError, RecursionError) as error:
+        raise InvalidReport(f"JSON として読めない: {error}") from error
+    return parse_report(raw)
+
+
 def import_inbox(inbox: Path, store: TriageStore) -> int:
     imported = 0
     for path in sorted(inbox.glob("*.json")):
         try:
-            written = path.stat()
-            if written.st_size > MAX_BODY_BYTES:
-                raise InvalidReport(f"{MAX_BODY_BYTES} バイトを超える")
-            report = parse_report(json.loads(path.read_text(encoding="utf-8")))
-        except (OSError, ValueError, RecursionError) as error:
+            written_at = datetime.fromtimestamp(path.stat().st_mtime, UTC)
+            report = parse_body(path.read_bytes())
+        except (OSError, InvalidReport) as error:
             print(f"{path} を取り込めませんでした: {error}", file=sys.stderr)
             continue
-        if store.save(report, datetime.fromtimestamp(written.st_mtime, UTC)):
+        if store.save(report, written_at):
             imported += 1
         path.unlink()
     return imported
@@ -316,8 +324,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._reject(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "本文は application/json で送る")
             return
         try:
-            report = parse_report(json.loads(body))
-        except (ValueError, RecursionError) as error:
+            report = parse_body(body)
+        except InvalidReport as error:
             self._reject(HTTPStatus.BAD_REQUEST, str(error))
             return
         saved = self.server.store.save(report, datetime.now(UTC))
@@ -342,10 +350,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 def main() -> None:
     store = TriageStore(ROOT / "data" / "prs.db")
+    server = DashboardServer(PORT, store, ROOT / "static" / "index.html")
     imported = import_inbox(ROOT / "inbox", store)
     if imported:
         print(f"inbox から {imported} 件取り込んだ")
-    server = DashboardServer(PORT, store, ROOT / "static" / "index.html")
     print(f"http://{HOST}:{PORT} で待ち受けている")
     with suppress(KeyboardInterrupt):
         server.serve_forever()
@@ -353,5 +361,15 @@ def main() -> None:
     store.close()
 
 
+def check_stdin() -> None:
+    try:
+        parse_body(sys.stdin.buffer.read())
+    except InvalidReport as error:
+        sys.exit(str(error))
+
+
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:] == ["--check"]:
+        check_stdin()
+    else:
+        main()
