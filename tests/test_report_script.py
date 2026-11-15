@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -40,19 +41,21 @@ def judgment_of(report: dict[str, object]) -> dict[str, object]:
 
 
 def run_script(
-    bin_dir: Path, judgment: str, dashboard: str, home: Path, *args: str
+    bin_dir: Path, judgment: str, dashboard: str | None, home: Path, *args: str
 ) -> subprocess.CompletedProcess[str]:
+    environment = os.environ | {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "PR_DASHBOARD_HOME": str(home),
+    }
+    environment.pop("PR_DASHBOARD_URL", None)
+    if dashboard is not None:
+        environment["PR_DASHBOARD_URL"] = dashboard
     return subprocess.run(
         [str(SCRIPT), *args],
         input=judgment,
         capture_output=True,
         text=True,
-        env=os.environ
-        | {
-            "PATH": f"{bin_dir}:{os.environ['PATH']}",
-            "PR_DASHBOARD_URL": dashboard,
-            "PR_DASHBOARD_HOME": str(home),
-        },
+        env=environment,
         check=False,
         timeout=30,
     )
@@ -82,6 +85,20 @@ def test_keeps_the_report_in_the_inbox_when_the_dashboard_is_down(
     assert result.returncode == 0, result.stderr
     saved = json.loads((inbox / "acme_web-128.json").read_text(encoding="utf-8"))
     assert saved == report
+
+
+def test_starts_a_stopped_dashboard_before_sending(
+    dashboard_home: Path, report: dict[str, object], fake_gh: Path
+) -> None:
+    judgment = json.dumps(judgment_of(report))
+
+    result = run_script(fake_gh, judgment, None, dashboard_home, "128")
+
+    assert result.returncode == 0, result.stderr
+    assert "acme/web#128" in result.stdout
+    with closing(TriageStore(dashboard_home / "prs.db")) as store:
+        [triage] = store.list_triages()
+    assert triage.report == report
 
 
 def test_does_not_keep_an_invalid_report_even_when_the_dashboard_is_down(
