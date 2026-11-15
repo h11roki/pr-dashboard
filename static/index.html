@@ -12,6 +12,10 @@
     --foreground: oklch(0.145 0 0);
     --card: oklch(1 0 0);
     --card-foreground: oklch(0.145 0 0);
+    --primary: oklch(0.205 0 0);
+    --primary-foreground: oklch(0.985 0 0);
+    --secondary: oklch(0.97 0 0);
+    --secondary-foreground: oklch(0.205 0 0);
     --muted: oklch(0.97 0 0);
     --muted-foreground: oklch(0.556 0 0);
     --accent: oklch(0.97 0 0);
@@ -33,6 +37,10 @@
       --foreground: oklch(0.985 0 0);
       --card: oklch(0.205 0 0);
       --card-foreground: oklch(0.985 0 0);
+      --primary: oklch(0.922 0 0);
+      --primary-foreground: oklch(0.205 0 0);
+      --secondary: oklch(0.269 0 0);
+      --secondary-foreground: oklch(0.985 0 0);
       --muted: oklch(0.269 0 0);
       --muted-foreground: oklch(0.708 0 0);
       --accent: oklch(0.371 0 0);
@@ -67,13 +75,20 @@
   .page-header h1 { font-size: 24px; line-height: 32px; font-weight: 600; letter-spacing: -0.025em; }
   .page-header p { color: var(--muted-foreground); }
 
+  .toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px 24px;
+    margin-bottom: 16px;
+  }
   .tabs-list {
     display: inline-flex;
     height: 36px;
     max-width: 100%;
     overflow-x: auto;
     padding: 3px;
-    margin-bottom: 16px;
     border-radius: var(--radius);
     background: var(--muted);
     color: var(--muted-foreground);
@@ -111,6 +126,33 @@
     text-align: center;
   }
 
+  .switch-field { display: inline-flex; align-items: center; gap: 8px; font-weight: 500; }
+  .switch-field label { cursor: pointer; user-select: none; }
+  .switch {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    width: 32px;
+    height: 18.4px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: var(--input);
+    box-shadow: var(--shadow-xs);
+    cursor: pointer;
+    transition: background-color 0.15s;
+  }
+  .switch[aria-checked="true"] { background: var(--primary); }
+  .switch-thumb {
+    display: block;
+    width: 16px;
+    height: 16px;
+    border-radius: 999px;
+    background: var(--background);
+    transition: transform 0.15s;
+  }
+  .switch[aria-checked="true"] .switch-thumb { transform: translateX(calc(100% - 2px)); }
+
   .message[data-kind="loading"] { color: var(--muted-foreground); }
   .message[data-kind="empty"] {
     padding: 48px 24px;
@@ -128,6 +170,34 @@
   }
 
   .cards { display: grid; gap: 16px; }
+  .cards:has(> .project) { gap: 28px; }
+  .project-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 0;
+    border-radius: calc(var(--radius) - 4px);
+    list-style: none;
+    cursor: pointer;
+  }
+  .project-header::-webkit-details-marker { display: none; }
+  .project-chevron { color: var(--muted-foreground); transition: transform 0.2s; }
+  .project:not([open]) .project-chevron { transform: rotate(-90deg); }
+  .project-title { min-width: 0; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+  .project-owner { color: var(--muted-foreground); font-weight: 400; }
+  .project-count {
+    min-width: 22px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: var(--secondary);
+    color: var(--secondary-foreground);
+    font-size: 12px;
+    line-height: 20px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+  }
+  .project-cards { margin-top: 12px; }
   .card {
     padding: 24px 0;
     border: 1px solid var(--border);
@@ -234,6 +304,12 @@
     }
     .button { border-color: var(--input); background: color-mix(in oklch, var(--input) 30%, transparent); }
     .button:hover { background: color-mix(in oklch, var(--input) 50%, transparent); }
+    .switch[aria-checked="false"] { background: color-mix(in oklch, var(--input) 80%, transparent); }
+    .switch[aria-checked="false"] .switch-thumb { background: var(--foreground); }
+    .switch[aria-checked="true"] .switch-thumb { background: var(--primary-foreground); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
   }
   @media (max-width: 560px) {
     .page { padding-top: 24px; }
@@ -253,15 +329,31 @@
     <h1>PRトリアージ</h1>
     <p>Claude Code が作った PR を読み、レビューに出すかを決める</p>
   </header>
-  <nav class="tabs-list" aria-label="判断の状態">
-    <button type="button" class="tabs-trigger" data-status="pending" aria-pressed="true">未判断<span class="count"></span></button>
-    <button type="button" class="tabs-trigger" data-status="on_hold" aria-pressed="false">保留<span class="count"></span></button>
-    <button type="button" class="tabs-trigger" data-status="requested" aria-pressed="false">依頼済み<span class="count"></span></button>
-    <button type="button" class="tabs-trigger" data-status="returned" aria-pressed="false">差し戻し<span class="count"></span></button>
-  </nav>
+  <div class="toolbar">
+    <nav class="tabs-list" aria-label="判断の状態">
+      <button type="button" class="tabs-trigger" data-status="pending" aria-pressed="true">未判断<span class="count"></span></button>
+      <button type="button" class="tabs-trigger" data-status="on_hold" aria-pressed="false">保留<span class="count"></span></button>
+      <button type="button" class="tabs-trigger" data-status="requested" aria-pressed="false">依頼済み<span class="count"></span></button>
+      <button type="button" class="tabs-trigger" data-status="returned" aria-pressed="false">差し戻し<span class="count"></span></button>
+    </nav>
+    <div class="switch-field">
+      <button type="button" role="switch" id="group-by-project" class="switch" aria-checked="true"><span class="switch-thumb"></span></button>
+      <label for="group-by-project">プロジェクトごとにまとめる</label>
+    </div>
+  </div>
   <p id="message" class="message" role="status" data-kind="loading">読み込み中…</p>
   <div id="cards" class="cards"></div>
 </div>
+<template id="project-template">
+  <details class="project" open>
+    <summary class="project-header">
+      <svg class="project-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+      <span class="project-title"><span class="project-owner"></span><span class="project-name"></span></span>
+      <span class="project-count"></span>
+    </summary>
+    <div class="project-cards cards"></div>
+  </details>
+</template>
 <template id="card-template">
   <details class="card">
     <summary class="card-header">
@@ -322,12 +414,34 @@
   const cards = document.getElementById("cards");
   const message = document.getElementById("message");
   const template = document.getElementById("card-template");
+  const projectTemplate = document.getElementById("project-template");
+  const groupSwitch = document.getElementById("group-by-project");
+  const GROUPING_KEY = "pr-dashboard:group-by-project";
   let selectedStatus = "pending";
   let triages = [];
   let latestRequest = 0;
   let lastResponse = "";
   let loadError = "";
+  let groupByProject = readGrouping();
   const expanded = new Map();
+  const collapsedProjects = new Set();
+
+  function readGrouping() {
+    try {
+      return localStorage.getItem(GROUPING_KEY) !== "false";
+    } catch (error) {
+      console.warn("まとめ方を読み出せませんでした", error);
+      return true;
+    }
+  }
+
+  function rememberGrouping() {
+    try {
+      localStorage.setItem(GROUPING_KEY, String(groupByProject));
+    } catch (error) {
+      console.warn("まとめ方を保存できませんでした", error);
+    }
+  }
 
   function setText(card, selector, text) {
     card.querySelector(selector).textContent = text;
@@ -381,6 +495,24 @@
     return card;
   }
 
+  function renderProject(repo, projectCards) {
+    const project = projectTemplate.content.firstElementChild.cloneNode(true);
+    const slash = repo.indexOf("/");
+    project.open = !collapsedProjects.has(repo);
+    project.addEventListener("toggle", () => {
+      if (project.open) {
+        collapsedProjects.delete(repo);
+      } else {
+        collapsedProjects.add(repo);
+      }
+    });
+    setText(project, ".project-owner", repo.slice(0, slash + 1));
+    setText(project, ".project-name", repo.slice(slash + 1));
+    setText(project, ".project-count", projectCards.length);
+    project.querySelector(".project-cards").replaceChildren(...projectCards);
+    return project;
+  }
+
   function render() {
     for (const tab of tabs) {
       const status = tab.dataset.status;
@@ -388,9 +520,16 @@
       tab.querySelector(".count").textContent = triages.filter((t) => t.status === status).length;
     }
     const shown = triages.filter((triage) => triage.status === selectedStatus);
-    cards.replaceChildren(
-      ...shown.map((triage, index) => renderCard(triage, expanded.get(triage.id) ?? index === 0)),
-    );
+    const firstId = shown[0]?.id;
+    const cardFor = (triage) => renderCard(triage, expanded.get(triage.id) ?? triage.id === firstId);
+    if (groupByProject) {
+      const projects = Map.groupBy(shown, (triage) => triage.report.repo);
+      cards.replaceChildren(
+        ...[...projects].map(([repo, items]) => renderProject(repo, items.map(cardFor))),
+      );
+    } else {
+      cards.replaceChildren(...shown.map(cardFor));
+    }
     if (loadError) {
       setMessage("error", `読み込めませんでした: ${loadError}`);
     } else {
@@ -428,6 +567,13 @@
       render();
     });
   }
+  groupSwitch.setAttribute("aria-checked", String(groupByProject));
+  groupSwitch.addEventListener("click", () => {
+    groupByProject = !groupByProject;
+    groupSwitch.setAttribute("aria-checked", String(groupByProject));
+    rememberGrouping();
+    render();
+  });
   window.addEventListener("focus", refresh);
   refresh();
 </script>
