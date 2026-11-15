@@ -11,7 +11,7 @@ Claude Code が作った PR の判断材料を受け取り、手元のブラウ�
 ## 構成
 
 - `server.py`: 報告の受け取り、検証、SQLite への保存、一覧の API、画面の配信。実行時は Python の標準ライブラリだけを使う
-- `static/index.html`: 画面。HTML と素の JavaScript の 1 ファイル
+- `static/index.html`: 画面。HTML と素の JavaScript の 1 ファイル。サーバーは起動時に 1 回だけ読むので、書き換えたら起動し直す
 - `data/prs.db`: 起動時に作られる。消せばリセットできる
 - `inbox/`: 送れなかった報告の退避先。起動時に取り込み、取り込めたファイルは消す
 

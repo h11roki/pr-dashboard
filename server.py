@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS prs (
 )
 """
 
-UPSERT = """
+UPSERT_REPORT = """
 INSERT INTO prs (repo, number, payload, received_at) VALUES (?, ?, ?, ?)
 ON CONFLICT (repo, number) DO UPDATE SET
     payload = excluded.payload,
@@ -59,7 +59,7 @@ ON CONFLICT (repo, number) DO UPDATE SET
 RETURNING id
 """
 
-SELECT = """
+SELECT_TRIAGES = """
 SELECT id, status, note, received_at, decided_at, payload FROM prs
 WHERE ? IS NULL OR status = ?
 ORDER BY status = 'pending' DESC, received_at DESC, id DESC
@@ -210,13 +210,13 @@ class TriageStore:
         received_at = datetime.now(UTC).isoformat()
         with self._lock, self._connection:
             row = self._connection.execute(
-                UPSERT, (report.repo, report.number, payload, received_at)
+                UPSERT_REPORT, (report.repo, report.number, payload, received_at)
             ).fetchone()
         return int(row["id"])
 
     def list_triages(self, status: str | None) -> list[Triage]:
         with self._lock:
-            rows = self._connection.execute(SELECT, (status, status)).fetchall()
+            rows = self._connection.execute(SELECT_TRIAGES, (status, status)).fetchall()
         return [
             Triage(
                 id=row["id"],
