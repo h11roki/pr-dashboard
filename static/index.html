@@ -325,6 +325,8 @@
   let selectedStatus = "pending";
   let triages = [];
   let latestRequest = 0;
+  let lastResponse = "";
+  let loadError = "";
   const expanded = new Map();
 
   function setText(card, selector, text) {
@@ -389,7 +391,11 @@
     cards.replaceChildren(
       ...shown.map((triage, index) => renderCard(triage, expanded.get(triage.id) ?? index === 0)),
     );
-    setMessage("empty", shown.length ? "" : "このタブに PR はありません");
+    if (loadError) {
+      setMessage("error", `読み込めませんでした: ${loadError}`);
+    } else {
+      setMessage("empty", shown.length ? "" : "このタブに PR はありません");
+    }
   }
 
   async function refresh() {
@@ -397,21 +403,22 @@
     try {
       const response = await fetch("/api/prs");
       if (!response.ok) {
-        const problem = await response.json().catch(() => ({}));
-        throw new Error(problem.error ?? `HTTP ${response.status}`);
+        throw new Error(`HTTP ${response.status}`);
       }
-      const received = await response.json();
-      if (request !== latestRequest) {
+      const text = await response.text();
+      if (request !== latestRequest || (text === lastResponse && !loadError)) {
         return;
       }
-      triages = received;
+      lastResponse = text;
+      triages = JSON.parse(text);
+      loadError = "";
       render();
     } catch (error) {
       if (request !== latestRequest) {
         return;
       }
-      cards.replaceChildren();
-      setMessage("error", `読み込めませんでした: ${error.message}`);
+      loadError = error.message;
+      render();
     }
   }
 
