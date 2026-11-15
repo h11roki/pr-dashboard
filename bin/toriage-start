@@ -17,7 +17,7 @@ running() {
 if [ "${1:-}" = "--restart" ]; then
   pid="$(cat "$home/server.pid" 2>/dev/null)" || pid=""
   command_line="$(ps -p "$pid" -o command= 2>/dev/null)" || command_line=""
-  if [[ "$command_line" == *toriage*/server.py* ]]; then
+  if [[ "$command_line" == *"$(dirname "$root")"/*/server.py* ]]; then
     kill "$pid" 2>/dev/null || true
   fi
   deadline=$((SECONDS + 5))
