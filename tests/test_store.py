@@ -27,9 +27,9 @@ def test_resending_a_pr_overwrites_its_report(
 
 def test_the_latest_report_comes_first(store: TriageStore, report: dict[str, object]) -> None:
     older = store.save(parse_report(report))
-    report["number"] = 129
-    newer = store.save(parse_report(report))
-    report["number"] = 128
+    newer = store.save(
+        parse_report(report | {"number": 129, "url": "https://github.com/acme/web/pull/129"})
+    )
     store.save(parse_report(report))
 
     assert [triage.id for triage in store.list_triages(None)] == [older, newer]
@@ -51,12 +51,15 @@ def test_imports_the_inbox_and_keeps_what_it_cannot_read(
     readable.write_text(json.dumps(report), encoding="utf-8")
     broken = inbox / "acme_web-129.json"
     broken.write_text("{", encoding="utf-8")
+    nested = inbox / "acme_web-130.json"
+    nested.write_text("[" * 50_000, encoding="utf-8")
 
     imported = import_inbox(inbox, store)
 
     assert imported == 1
     assert not readable.exists()
     assert broken.exists()
+    assert nested.exists()
     assert len(store.list_triages(None)) == 1
 
 

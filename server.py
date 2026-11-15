@@ -15,7 +15,8 @@ HOST = "127.0.0.1"
 PORT = 8787
 MAX_BODY_BYTES = 64 * 1024
 MAX_SUMMARY_LINES = 3
-REPO_PATTERN = re.compile(r"[\w.-]+/[\w.-]+")
+MAX_PR_NUMBER = 2**31 - 1
+REPO_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/(?!\.{1,2}$)[A-Za-z0-9._][A-Za-z0-9._-]*")
 RISKS = ("low", "medium", "high")
 TEST_STATUSES = ("passed", "failed", "not_run")
 STATUSES = ("pending", "requested", "returned", "on_hold")
@@ -127,10 +128,19 @@ def _choice(data: dict[str, object], key: str, choices: tuple[str, ...]) -> str:
     return value
 
 
+def _text(data: dict[str, object], key: str) -> str:
+    value = _field(data, key, str)
+    if not value.strip():
+        raise InvalidReport(f"{key} を空にしない")
+    return value
+
+
 def _texts(data: dict[str, object], key: str) -> tuple[str, ...]:
     value = data.get(key)
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise InvalidReport(f"{key} は文字列の配列で指定する")
+    if not isinstance(value, list) or not all(
+        isinstance(item, str) and item.strip() for item in value
+    ):
+        raise InvalidReport(f"{key} は空でない文字列の配列で指定する")
     return tuple(value)
 
 
@@ -148,8 +158,11 @@ def parse_report(raw: object) -> Report:
     if not REPO_PATTERN.fullmatch(repo):
         raise InvalidReport("repo は owner/name の形で指定する")
     number = _field(raw, "number", int)
-    if number < 1:
-        raise InvalidReport("number は 1 以上で指定する")
+    if not 1 <= number <= MAX_PR_NUMBER:
+        raise InvalidReport(f"number は 1〜{MAX_PR_NUMBER} で指定する")
+    url = _field(raw, "url", str)
+    if url != f"https://github.com/{repo}/pull/{number}":
+        raise InvalidReport(f"url は https://github.com/{repo}/pull/{number} にする")
     summary = _texts(raw, "summary")
     if not 1 <= len(summary) <= MAX_SUMMARY_LINES:
         raise InvalidReport(f"summary は 1〜{MAX_SUMMARY_LINES} 行で書く")
@@ -158,22 +171,22 @@ def parse_report(raw: object) -> Report:
     return Report(
         repo=repo,
         number=number,
-        url=_https_url(raw, "url"),
-        title=_field(raw, "title", str),
-        branch=_field(raw, "branch", str),
+        url=url,
+        title=_text(raw, "title"),
+        branch=_text(raw, "branch"),
         changes=Changes(
             files=_count(changes, "files"),
             additions=_count(changes, "additions"),
             deletions=_count(changes, "deletions"),
         ),
         summary=summary,
-        why=_field(raw, "why", str),
+        why=_text(raw, "why"),
         risk=_choice(raw, "risk", RISKS),
-        risk_reason=_field(raw, "risk_reason", str),
+        risk_reason=_text(raw, "risk_reason"),
         concerns=_texts(raw, "concerns"),
         tests=TestResult(
             status=_choice(tests, "status", TEST_STATUSES),
-            detail=_field(tests, "detail", str),
+            detail=_text(tests, "detail"),
         ),
         suggested_reviewers=_texts(raw, "suggested_reviewers"),
         artifact_url=None if raw.get("artifact_url") is None else _https_url(raw, "artifact_url"),
@@ -219,7 +232,7 @@ def import_inbox(inbox: Path, store: TriageStore) -> int:
     for path in sorted(inbox.glob("*.json")):
         try:
             report = parse_report(json.loads(path.read_text(encoding="utf-8")))
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, RecursionError) as error:
             print(f"{path} を取り込めませんでした: {error}", file=sys.stderr)
             continue
         store.save(report)
@@ -269,19 +282,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def _receive_report(self) -> None:
         length = self.headers.get("Content-Length", "")
+        if not (length.isascii() and length.isdigit()):
+            self._reject(HTTPStatus.LENGTH_REQUIRED, "Content-Length を付ける")
+            return
+        if int(length) > MAX_BODY_BYTES:
+            self._reject(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, f"本文は {MAX_BODY_BYTES} バイトまで")
+            return
+        body = self.rfile.read(int(length))
         if self.headers.get_content_type() != "application/json":
             self._reject(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "本文は application/json で送る")
-        elif not (length.isascii() and length.isdigit()):
-            self._reject(HTTPStatus.LENGTH_REQUIRED, "Content-Length を付ける")
-        elif int(length) > MAX_BODY_BYTES:
-            self._reject(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, f"本文は {MAX_BODY_BYTES} バイトまで")
-        else:
-            try:
-                report = parse_report(json.loads(self.rfile.read(int(length))))
-            except ValueError as error:
-                self._reject(HTTPStatus.BAD_REQUEST, str(error))
-                return
-            self._send_json(HTTPStatus.OK, {"id": self.server.store.save(report)})
+            return
+        try:
+            report = parse_report(json.loads(body))
+        except (ValueError, RecursionError) as error:
+            self._reject(HTTPStatus.BAD_REQUEST, str(error))
+            return
+        self._send_json(HTTPStatus.OK, {"id": self.server.store.save(report)})
 
     def _send_triages(self, query: str) -> None:
         statuses = parse_qs(query).get("status")

@@ -100,6 +100,12 @@ def test_explains_why_a_report_is_invalid(port: int, report: dict[str, object]) 
     assert "risk" in json.loads(body)["error"]
 
 
+def test_answers_deeply_nested_json_with_an_error(port: int) -> None:
+    status, _ = send(port, "POST", "/api/prs", b"[" * 50_000, {"Content-Type": "application/json"})
+
+    assert status == 400
+
+
 def test_refuses_an_unknown_status(port: int) -> None:
     status, _ = send(port, "GET", "/api/prs?status=merged")
 
