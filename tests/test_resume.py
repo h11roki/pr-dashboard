@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import time
 from collections.abc import Callable
@@ -17,6 +18,7 @@ with open({calls!r}, "w") as calls:
             "args": sys.argv[1:],
             "cwd": os.getcwd(),
             "session_variable": os.environ.get("CLAUDE_CODE_SESSION_ID"),
+            "path": os.environ.get("PATH"),
         }},
         calls,
     )
@@ -99,6 +101,23 @@ def test_resumes_the_session_in_its_workdir_with_auto_mode(
     wait_until(lambda: "終了コード 0" in log_of(logs))
     assert "に差し戻した" in log_of(logs)
     assert "直して送り直した" in log_of(logs)
+
+
+def test_leaves_out_the_report_command_the_server_was_started_with(
+    tmp_path: Path, fake_claude: FakeClaude, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    older_plugin = tmp_path / "plugins" / "toriage" / "0.1.0" / "bin"
+    older_plugin.mkdir(parents=True)
+    (older_plugin / "toriage-report").write_text("#!/bin/sh\n", encoding="utf-8")
+    path_without_plugin = os.environ["PATH"]
+    monkeypatch.setenv("PATH", f"{older_plugin}{os.pathsep}{path_without_plugin}")
+
+    resume_in_background(tmp_path / "returns")(
+        Session(id=SESSION_ID, workdir=str(workdir)), "直してください"
+    )
+
+    assert fake_claude.call()["path"] == path_without_plugin
+    fake_claude.finish()
 
 
 def test_does_not_resume_a_session_that_is_still_running(

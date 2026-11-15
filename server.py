@@ -31,6 +31,7 @@ TEST_STATUSES = ("passed", "failed", "not_run")
 ACTION_PATH = re.compile(r"/api/prs/([0-9]{1,10})/(request-review|return|hold)")
 MAX_REASON_LENGTH = 2000
 GH_TIMEOUT_SECONDS = 30
+REPORT_COMMAND = "toriage-report"
 INHERITED_SESSION_VARIABLES = frozenset(
     {
         "CLAUDECODE",
@@ -479,11 +480,7 @@ def resume_in_background(logs: Path) -> ResumeSession:
                             prompt,
                         ],
                         cwd=session.workdir,
-                        env={
-                            name: value
-                            for name, value in os.environ.items()
-                            if name not in INHERITED_SESSION_VARIABLES
-                        },
+                        env=_resume_environment(),
                         stdin=subprocess.DEVNULL,
                         stdout=output,
                         stderr=subprocess.STDOUT,
@@ -500,6 +497,19 @@ def resume_in_background(logs: Path) -> ResumeSession:
         threading.Thread(target=wait_and_record, args=(process, log, marker), daemon=True).start()
 
     return resume
+
+
+def _resume_environment() -> dict[str, str]:
+    environment = {
+        name: value for name, value in os.environ.items() if name not in INHERITED_SESSION_VARIABLES
+    }
+    if "PATH" in environment:
+        environment["PATH"] = os.pathsep.join(
+            directory
+            for directory in environment["PATH"].split(os.pathsep)
+            if not (Path(directory) / REPORT_COMMAND).is_file()
+        )
+    return environment
 
 
 def _still_resuming(marker: Path, session: Session) -> bool:
