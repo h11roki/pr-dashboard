@@ -309,6 +309,13 @@
     .switch[aria-checked="false"] .switch-thumb { background: var(--foreground); }
     .switch[aria-checked="true"] .switch-thumb { background: var(--primary-foreground); }
   }
+  .switch:focus-visible,
+  .tabs-trigger:focus-visible,
+  .button:focus-visible,
+  .project-header:focus-visible {
+    border-color: var(--ring);
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
+  }
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
   }
@@ -436,7 +443,7 @@
     return `${status} ${repo}`;
   }
 
-  function forgetMissing() {
+  function updateViewState(previouslyReceived) {
     const ids = new Set(triages.map((triage) => triage.id));
     const keys = new Set(triages.map((triage) => projectKey(triage.status, triage.report.repo)));
     for (const id of expanded.keys()) {
@@ -447,6 +454,12 @@
     for (const key of collapsedProjects) {
       if (!keys.has(key)) {
         collapsedProjects.delete(key);
+      }
+    }
+    for (const triage of triages) {
+      if (previouslyReceived.get(triage.id) !== triage.received_at) {
+        expanded.delete(triage.id);
+        collapsedProjects.delete(projectKey(triage.status, triage.report.repo));
       }
     }
   }
@@ -521,9 +534,8 @@
     return card;
   }
 
-  function renderProject(repo, projectCards, status) {
+  function renderProject(repo, projectCards, key) {
     const project = projectTemplate.content.firstElementChild.cloneNode(true);
-    const key = projectKey(status, repo);
     const slash = repo.indexOf("/");
     project.open = !collapsedProjects.has(key);
     project.addEventListener("toggle", () => {
@@ -540,7 +552,7 @@
     return project;
   }
 
-  function renderProjects(shown, status) {
+  function renderProjects(shown, status, firstOpen) {
     const projects = new Map();
     for (const triage of shown) {
       const repo = triage.report.repo;
@@ -550,13 +562,11 @@
       projects.get(repo).push(triage);
     }
     const repos = [...projects.keys()].sort((a, b) => a.localeCompare(b));
-    const firstOpenRepo = repos.find((repo) => !collapsedProjects.has(projectKey(status, repo)));
-    const firstOpen = firstOpenRepo && projects.get(firstOpenRepo)[0];
     return repos.map((repo) =>
       renderProject(
         repo,
         projects.get(repo).map((triage) => renderCard(triage, triage === firstOpen)),
-        status,
+        projectKey(status, repo),
       ),
     );
   }
@@ -568,11 +578,15 @@
       tab.querySelector(".count").textContent = triages.filter((t) => t.status === status).length;
     }
     const shown = triages.filter((triage) => triage.status === selectedStatus);
+    const firstOpen = shown.find(
+      (triage) =>
+        !groupByProject || !collapsedProjects.has(projectKey(selectedStatus, triage.report.repo)),
+    );
     cards.className = groupByProject ? "project-list" : "card-list";
     cards.replaceChildren(
       ...(groupByProject
-        ? renderProjects(shown, selectedStatus)
-        : shown.map((triage) => renderCard(triage, triage === shown[0]))),
+        ? renderProjects(shown, selectedStatus, firstOpen)
+        : shown.map((triage) => renderCard(triage, triage === firstOpen))),
     );
     if (loadError) {
       setMessage("error", `読み込めませんでした: ${loadError}`);
@@ -592,10 +606,11 @@
       if (request !== latestRequest || (text === lastResponse && !loadError)) {
         return;
       }
+      const previouslyReceived = new Map(triages.map((triage) => [triage.id, triage.received_at]));
       lastResponse = text;
       triages = JSON.parse(text);
       loadError = "";
-      forgetMissing();
+      updateViewState(previouslyReceived);
       render();
     } catch (error) {
       if (request !== latestRequest) {
@@ -617,6 +632,12 @@
     applyGrouping(!groupByProject);
     rememberGrouping();
     render();
+  });
+  window.addEventListener("storage", (event) => {
+    if (event.key === GROUPING_KEY) {
+      applyGrouping(event.newValue !== "false");
+      render();
+    }
   });
   window.addEventListener("focus", refresh);
   refresh();
