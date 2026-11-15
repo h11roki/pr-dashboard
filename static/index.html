@@ -153,9 +153,14 @@
   }
   .switch[aria-checked="true"] .switch-thumb { transform: translateX(calc(100% - 2px)); }
 
-  .notice {
-    margin: 0 0 16px;
-    padding: 12px 16px;
+  .notices { display: grid; gap: 8px; margin: 0 0 16px; padding: 0; list-style: none; }
+  .notices:empty { display: none; }
+  .notices li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 6px 6px 16px;
     border: 1px solid var(--warn);
     border-radius: var(--radius);
     background: color-mix(in oklch, var(--warn) 10%, transparent);
@@ -393,7 +398,7 @@
       <label for="group-by-project">プロジェクトごとにまとめる</label>
     </div>
   </div>
-  <p id="notice" class="notice" role="status" hidden></p>
+  <ul id="notices" class="notices" role="status"></ul>
   <p id="message" class="message" role="status" data-kind="loading">読み込み中…</p>
   <div id="cards" class="card-list"></div>
 </div>
@@ -495,7 +500,7 @@
   const tabs = [...document.querySelectorAll(".tabs-trigger")];
   const cards = document.getElementById("cards");
   const message = document.getElementById("message");
-  const notice = document.getElementById("notice");
+  const notices = document.getElementById("notices");
   const template = document.getElementById("card-template");
   const projectTemplate = document.getElementById("project-template");
   const groupSwitch = document.getElementById("group-by-project");
@@ -506,10 +511,10 @@
   let lastResponse = "";
   let loadError = "";
   let groupByProject = true;
-  const runningDecisions = new Set();
-  let renderWaiting = false;
   const expanded = new Map();
   const collapsedProjects = new Set();
+  const drafts = new Map();
+  const runningDecisions = new Set();
 
   function applyGrouping(value) {
     groupByProject = value;
@@ -521,16 +526,21 @@
   }
 
   function updateViewState(previouslyReceived) {
-    const ids = new Set(triages.map((triage) => triage.id));
+    const byId = new Map(triages.map((triage) => [triage.id, triage]));
     const keys = new Set(triages.map((triage) => projectKey(triage.status, triage.report.repo)));
     for (const id of expanded.keys()) {
-      if (!ids.has(id)) {
+      if (!byId.has(id)) {
         expanded.delete(id);
       }
     }
     for (const key of collapsedProjects) {
       if (!keys.has(key)) {
         collapsedProjects.delete(key);
+      }
+    }
+    for (const [id, draft] of drafts) {
+      if (!byId.get(id)?.actions.includes(draft.action)) {
+        drafts.delete(id);
       }
     }
     for (const triage of triages) {
@@ -580,10 +590,28 @@
     message.hidden = text === "";
   }
 
+  function addNotice(triage, text) {
+    const item = document.createElement("li");
+    const close = Object.assign(document.createElement("button"), {
+      type: "button",
+      className: "button ghost",
+      textContent: "閉じる",
+    });
+    close.addEventListener("click", () => item.remove());
+    item.append(
+      Object.assign(document.createElement("span"), {
+        textContent: `${triage.repo}#${triage.number}: ${text}`,
+      }),
+      close,
+    );
+    notices.prepend(item);
+  }
+
   function renderCard(triage, open) {
     const card = template.content.firstElementChild.cloneNode(true);
     const { report } = triage;
     const { changes } = report;
+    card.dataset.id = triage.id;
     card.open = expanded.get(triage.id) ?? open;
     card.addEventListener("toggle", () => expanded.set(triage.id, card.open));
     setText(card, ".repo-name", report.repo);
@@ -620,17 +648,30 @@
     });
     if (!response.ok) {
       const problem = await response.json().catch(() => ({}));
-      throw Object.assign(new Error(problem.error ?? `HTTP ${response.status}`), {
-        status: response.status,
-      });
+      throw new Error(problem.error ?? `HTTP ${response.status}`);
     }
     return response.json();
   }
 
-  function renderUnlessEditing() {
-    if (runningDecisions.size > 0 || cards.querySelector(".decision:not([hidden])")) {
-      renderWaiting = true;
-      return;
+  async function decideOn(triage) {
+    const draft = drafts.get(triage.id);
+    draft.error = "";
+    runningDecisions.add(triage.id);
+    render();
+    try {
+      const decision = await postDecision(triage, draft.action, draft.reason);
+      drafts.delete(triage.id);
+      if (decision.warning) {
+        addNotice(triage, decision.warning);
+      }
+    } catch (problem) {
+      draft.error = `できませんでした: ${problem.message}`;
+    } finally {
+      runningDecisions.delete(triage.id);
+    }
+    await refresh();
+    if (draft.error && !drafts.has(triage.id)) {
+      addNotice(triage, draft.error);
     }
     render();
   }
@@ -652,68 +693,45 @@
         button.remove();
       }
     }
-
-    function setBusy(busy) {
-      for (const button of card.querySelectorAll(".actions button, .decision button")) {
-        button.disabled = busy;
-      }
+    for (const button of card.querySelectorAll(".actions button, .decision button")) {
+      button.disabled = runningDecisions.has(triage.id);
     }
 
-    async function run(action) {
-      setBusy(true);
-      error.hidden = true;
-      notice.hidden = true;
-      runningDecisions.add(triage.id);
-      try {
-        const decision = await postDecision(triage, action, reason.value);
-        panel.hidden = true;
-        notice.textContent = decision.warning;
-        notice.hidden = decision.warning === "";
-      } catch (problem) {
-        const text = `できませんでした: ${problem.message}`;
-        if (problem.status !== 409 && card.isConnected) {
-          error.textContent = text;
-          error.hidden = false;
-          setBusy(false);
-          return;
-        }
-        panel.hidden = true;
-        notice.textContent = text;
-        notice.hidden = false;
-        renderWaiting = true;
-      } finally {
-        runningDecisions.delete(triage.id);
+    function showDraft() {
+      const draft = drafts.get(triage.id);
+      error.textContent = draft?.error ?? "";
+      error.hidden = !draft?.error;
+      panel.hidden = !draft || draft.action === "hold";
+      if (panel.hidden) {
+        return;
       }
-      await refresh();
-    }
-
-    if (runningDecisions.has(triage.id)) {
-      setBusy(true);
+      setText(panel, ".decision-text", CONFIRMATIONS[draft.action].text(triage));
+      confirm.textContent = CONFIRMATIONS[draft.action].label;
+      reason.hidden = draft.action !== "return";
+      reason.value = draft.reason;
     }
 
     for (const button of actions.querySelectorAll("button")) {
       button.addEventListener("click", () => {
         const action = button.dataset.action;
+        drafts.set(triage.id, { action, reason: drafts.get(triage.id)?.reason ?? "", error: "" });
         if (action === "hold") {
-          run(action);
+          decideOn(triage);
           return;
         }
-        panel.dataset.action = action;
-        setText(panel, ".decision-text", CONFIRMATIONS[action].text(triage));
-        confirm.textContent = CONFIRMATIONS[action].label;
-        reason.hidden = action !== "return";
-        error.hidden = true;
-        panel.hidden = false;
+        showDraft();
         (action === "return" ? reason : confirm).focus();
       });
     }
-    confirm.addEventListener("click", () => run(panel.dataset.action));
-    panel.querySelector("[data-cancel]").addEventListener("click", () => {
-      panel.hidden = true;
-      if (renderWaiting) {
-        renderUnlessEditing();
-      }
+    reason.addEventListener("input", () => {
+      drafts.get(triage.id).reason = reason.value;
     });
+    confirm.addEventListener("click", () => decideOn(triage));
+    panel.querySelector("[data-cancel]").addEventListener("click", () => {
+      drafts.delete(triage.id);
+      showDraft();
+    });
+    showDraft();
   }
 
   function renderProject(repo, projectCards, key) {
@@ -754,7 +772,13 @@
   }
 
   function render() {
-    renderWaiting = false;
+    const typing = document.activeElement?.classList.contains("reason")
+      ? {
+          id: document.activeElement.closest(".card").dataset.id,
+          start: document.activeElement.selectionStart,
+          end: document.activeElement.selectionEnd,
+        }
+      : null;
     for (const tab of tabs) {
       const status = tab.dataset.status;
       tab.setAttribute("aria-pressed", String(status === selectedStatus));
@@ -771,6 +795,11 @@
         ? renderProjects(shown, selectedStatus, firstOpen)
         : shown.map((triage) => renderCard(triage, triage === firstOpen))),
     );
+    const reason = typing && cards.querySelector(`.card[data-id="${typing.id}"] .reason`);
+    if (reason && !reason.hidden) {
+      reason.focus();
+      reason.setSelectionRange(typing.start, typing.end);
+    }
     if (loadError) {
       setMessage("error", `読み込めませんでした: ${loadError}`);
     } else {
@@ -786,7 +815,7 @@
         throw new Error(`HTTP ${response.status}`);
       }
       const text = await response.text();
-      if (request !== latestRequest || (text === lastResponse && !loadError && !renderWaiting)) {
+      if (request !== latestRequest || (text === lastResponse && !loadError)) {
         return;
       }
       const previouslyReceived = new Map(triages.map((triage) => [triage.id, triage.received_at]));
@@ -794,13 +823,13 @@
       triages = JSON.parse(text);
       loadError = "";
       updateViewState(previouslyReceived);
-      renderUnlessEditing();
+      render();
     } catch (error) {
       if (request !== latestRequest) {
         return;
       }
       loadError = error.message;
-      renderUnlessEditing();
+      render();
     }
   }
 
