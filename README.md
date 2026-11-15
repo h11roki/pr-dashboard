@@ -1,6 +1,6 @@
-# PRトリアージ
+# toriage
 
-Claude Code が作った PR を、レビューに出すかどうか手元のブラウザで決める Claude Code のプラグインです。Claude が書いた判断材料をカードで読み、「レビュー依頼」「差し戻し」「保留」のボタンを押すと、その場で GitHub に反映されます。
+toriage(とりあげ)は、Claude Code が作った PR を、レビューに出すかどうか手元のブラウザで決める Claude Code のプラグインです。Claude が書いた判断材料をカードで読み、「レビュー依頼」「差し戻し」「保留」のボタンを押すと、その場で GitHub に反映されます。名前は triage(トリアージ、選り分け)と「取り上げる」を掛けています。
 
 ![未判断の PR がリポジトリごとに並んだ画面](docs/images/overview.png)
 
@@ -8,7 +8,7 @@ Claude Code が作った PR を、レビューに出すかどうか手元のブ�
 
 Claude Code に PR を作らせると、PR の数が人の読む速さを超えます。1 件ずつ GitHub を開いて差分を読み、出してよいかを決めるのは重い作業です。
 
-PRトリアージでは、PR を作った Claude 自身が「何を変えたか、なぜ変えたか、どれくらい危ないか、どこを人が見るべきか、テストは通ったか」を書いて送ります。人はそれを読んで、レビューに回すか、直させるか、後回しにするかだけを決めます。
+toriage では、PR を作った Claude 自身が「何を変えたか、なぜ変えたか、どれくらい危ないか、どこを人が見るべきか、テストは通ったか」を書いて送ります。人はそれを読んで、レビューに回すか、直させるか、後回しにするかだけを決めます。
 
 ## できること
 
@@ -31,10 +31,10 @@ PRトリアージでは、PR を作った Claude 自身が「何を変えたか�
 ```mermaid
 flowchart LR
   subgraph cc[Claude Code]
-    skill["/pr-dashboard:report"]
+    skill["/toriage:report"]
     hook[SessionStart のフック]
   end
-  report[pr-dashboard-report]
+  report[toriage-report]
   server["ダッシュボード<br/>127.0.0.1:8787"]
   db[(SQLite)]
   browser[ブラウザ]
@@ -49,7 +49,7 @@ flowchart LR
 ```
 
 1. Claude Code を開くと、フックがダッシュボードのサーバーを裏で起動します
-2. PR を作ったあと、Claude が `/pr-dashboard:report` のスキルに従って判断材料の JSON を書き、`pr-dashboard-report` で送ります
+2. PR を作ったあと、Claude が `/toriage:report` のスキルに従って判断材料の JSON を書き、`toriage-report` で送ります
 3. 送る前に、サーバーと同じ検証を通します。ダッシュボードに届かなかったときは inbox に置き、次に起動したときに取り込みます
 4. 人がブラウザで判断すると、サーバーが `gh` で GitHub に反映します
 
@@ -66,20 +66,20 @@ flowchart LR
 Claude Code で次の 2 つを実行します。
 
 ```
-/plugin marketplace add h11roki/pr-dashboard
-/plugin install pr-dashboard@h11roki
+/plugin marketplace add h11roki/toriage
+/plugin install toriage@h11roki
 ```
 
-入れたあと Claude Code を開き直すと、ダッシュボードが起動します。`/pr-dashboard:open` で画面を開けます。
+入れたあと Claude Code を開き直すと、ダッシュボードが起動します。`/toriage:open` で画面を開けます。
 
 ## 使い方
 
 ### PR の判断材料を送る
 
-PR を作ったあと、Claude Code に `/pr-dashboard:report` を使わせます。毎回頼まなくて済むよう、`CLAUDE.md` や自分の PR 作成のスキルに次のように書いておくのがおすすめです。
+PR を作ったあと、Claude Code に `/toriage:report` を使わせます。毎回頼まなくて済むよう、`CLAUDE.md` や自分の PR 作成のスキルに次のように書いておくのがおすすめです。
 
 ```markdown
-PR を作ったら、/pr-dashboard:report でダッシュボードに判断材料を送る。PR を直したときも送り直す
+PR を作ったら、/toriage:report でダッシュボードに判断材料を送る。PR を直したときも送り直す
 ```
 
 Claude が書く項目は次のとおりです。題、ブランチ、URL、変更の数は `gh` から自動で足されます。
@@ -113,7 +113,7 @@ PR は Draft で作るのがおすすめです。判断するまでレビュア�
 
 ## データと起動
 
-データは `~/.local/share/pr-dashboard/` に置きます。`PR_DASHBOARD_HOME` を絶対パスで設定するとその場所に、`XDG_DATA_HOME` を絶対パスで設定しているとその下に置きます。
+データは `~/.local/share/toriage/` に置きます。`TORIAGE_HOME` を絶対パスで設定するとその場所に、`XDG_DATA_HOME` を絶対パスで設定しているとその下に置きます。
 
 | ファイル | 中身 |
 |---|---|
@@ -122,9 +122,9 @@ PR は Draft で作るのがおすすめです。判断するまでレビュア�
 | `server.log` | サーバーの記録。起動できなかった理由もここに出る |
 | `server.pid` | 動いているサーバーのプロセス番号。サーバーが起動したときに書く |
 
-プラグインを更新したあとは、動いているサーバーが古いままです。Claude に `pr-dashboard-start --restart` を実行させて起動し直します(`bin/` のコマンドは、プラグインが有効なあいだ Claude の Bash から使えます)。止められなかったときは、理由を出して失敗します。
+プラグインを更新したあとは、動いているサーバーが古いままです。Claude に `toriage-start --restart` を実行させて起動し直します(`bin/` のコマンドは、プラグインが有効なあいだ Claude の Bash から使えます)。止められなかったときは、理由を出して失敗します。
 
-止めるときは `server.pid` のプロセスを止めます。既定の場所なら `kill "$(cat ~/.local/share/pr-dashboard/server.pid)"` です。プラグインを消してもデータは残るので、要らなければ手で消してください。
+止めるときは `server.pid` のプロセスを止めます。既定の場所なら `kill "$(cat ~/.local/share/toriage/server.pid)"` です。プラグインを消してもデータは残るので、要らなければ手で消してください。
 
 ## 安全のために
 

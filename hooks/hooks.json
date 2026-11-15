@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/pr-dashboard-start\"",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/toriage-start\"",
             "timeout": 15
           }
         ]

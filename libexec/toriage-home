@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${TORIAGE_HOME:-}" == /* ]]; then
+  echo "$TORIAGE_HOME"
+elif [[ "${XDG_DATA_HOME:-}" == /* ]]; then
+  echo "$XDG_DATA_HOME/toriage"
+else
+  echo "$HOME/.local/share/toriage"
+fi

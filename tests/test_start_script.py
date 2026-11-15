@@ -4,7 +4,7 @@ from pathlib import Path
 
 from server import ROOT
 
-START = ROOT / "bin" / "pr-dashboard-start"
+START = ROOT / "bin" / "toriage-start"
 
 
 def start(home: Path, *args: str, path: str | None = None) -> subprocess.CompletedProcess[str]:
@@ -12,7 +12,7 @@ def start(home: Path, *args: str, path: str | None = None) -> subprocess.Complet
         [str(START), *args],
         capture_output=True,
         text=True,
-        env=os.environ | {"PR_DASHBOARD_HOME": str(home), "PATH": path or os.environ["PATH"]},
+        env=os.environ | {"TORIAGE_HOME": str(home), "PATH": path or os.environ["PATH"]},
         check=False,
         timeout=30,
     )

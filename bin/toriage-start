@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root="$(CDPATH='' cd -- "$(dirname -- "$(readlink -f -- "$0")")/.." && pwd -P)"
-home="$("$root/libexec/pr-dashboard-home")"
+home="$("$root/libexec/toriage-home")"
 url="http://127.0.0.1:8787"
 
 fail() {
@@ -17,7 +17,7 @@ running() {
 if [ "${1:-}" = "--restart" ]; then
   pid="$(cat "$home/server.pid" 2>/dev/null)" || pid=""
   command_line="$(ps -p "$pid" -o command= 2>/dev/null)" || command_line=""
-  if [[ "$command_line" == *pr-dashboard*/server.py* ]]; then
+  if [[ "$command_line" == *toriage*/server.py* ]]; then
     kill "$pid" 2>/dev/null || true
   fi
   deadline=$((SECONDS + 5))
@@ -35,7 +35,7 @@ fi
 
 mkdir -p "$home"
 cd "$home"
-env -u GH_TOKEN -u GITHUB_TOKEN nohup "$root/libexec/pr-dashboard-python" -I -u "$root/server.py" \
+env -u GH_TOKEN -u GITHUB_TOKEN nohup "$root/libexec/toriage-python" -I -u "$root/server.py" \
   >>"$home/server.log" 2>&1 </dev/null &
 launched=$!
 deadline=$((SECONDS + 10))

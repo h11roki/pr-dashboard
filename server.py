@@ -558,13 +558,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 
 def data_home() -> Path:
-    home = Path(os.environ.get("PR_DASHBOARD_HOME", ""))
+    home = Path(os.environ.get("TORIAGE_HOME", ""))
     if home.is_absolute():
         return home
     shared = Path(os.environ.get("XDG_DATA_HOME", ""))
     if not shared.is_absolute():
         shared = Path.home() / ".local" / "share"
-    return shared / "pr-dashboard"
+    return shared / "toriage"
 
 
 def main() -> None:
