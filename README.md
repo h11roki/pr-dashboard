@@ -113,7 +113,7 @@ PR は Draft で作るのがおすすめです。判断するまでレビュア�
 | `server.log` | サーバーの記録。起動できなかった理由もここに出る |
 | `server.pid` | 動いているサーバーのプロセス番号。起動したときに書き、止まるときに消す |
 
-リセットするときは、`curl -X POST http://127.0.0.1:8787/api/shutdown` でダッシュボードを止めてから `prs.db` を消し、Claude に `toriage-start` を実行させて起動し直します。
+リセットするときは、`curl -X POST http://127.0.0.1:8787/api/shutdown` でダッシュボードを止めてから `prs.db` を消し、Claude Code で `/toriage:open` を呼んで起動し直します。
 
 プラグインを更新したあとは、動いているサーバーが古いままです。Claude に `toriage-start --restart` を実行させて起動し直します(`bin/` のコマンドは、プラグインが有効なあいだ Claude の Bash から使えます)。止められなかったときは、理由を出して失敗します。
 
