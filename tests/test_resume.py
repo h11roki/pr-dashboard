@@ -132,10 +132,29 @@ def test_leaves_out_the_plugin_bin_the_server_was_started_with(
     fake_claude.finish()
 
 
+def test_leaves_out_a_plugin_bin_reached_through_a_symlink(
+    tmp_path: Path, fake_claude: FakeClaude, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    linked_bin = tmp_path / "linked-bin"
+    linked_bin.symlink_to(install_plugin(tmp_path / "plugins" / "toriage" / "0.1.0"))
+    path_without_plugin = os.environ["PATH"]
+    monkeypatch.setenv("PATH", f"{linked_bin}{os.pathsep}{path_without_plugin}")
+
+    resume_in_background(tmp_path / "returns")(
+        Session(id=SESSION_ID, workdir=str(workdir)), "直してください"
+    )
+
+    assert fake_claude.call()["path"] == path_without_plugin
+    fake_claude.finish()
+
+
 def test_checks_a_relative_path_entry_from_the_workdir(
     tmp_path: Path, fake_claude: FakeClaude, workdir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     install_plugin(workdir)
+    data_home = tmp_path / "data-home"
+    data_home.mkdir()
+    monkeypatch.chdir(data_home)
     path_without_plugin = os.environ["PATH"]
     monkeypatch.setenv("PATH", f"bin{os.pathsep}{path_without_plugin}")
 

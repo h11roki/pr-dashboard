@@ -458,6 +458,7 @@ def resume_in_background(logs: Path) -> ResumeSession:
     def resume(session: Session, prompt: str) -> None:
         if not Path(session.workdir).is_dir():
             raise ResumeFailed(f"PR を作った場所 {session.workdir} がもうない")
+        environment = _resume_environment(session.workdir)
         log = logs / f"{session.id}.log"
         marker = logs / f"{session.id}.pid"
         with lock:
@@ -481,7 +482,7 @@ def resume_in_background(logs: Path) -> ResumeSession:
                             prompt,
                         ],
                         cwd=session.workdir,
-                        env=_resume_environment(session.workdir),
+                        env=environment,
                         stdin=subprocess.DEVNULL,
                         stdout=output,
                         stderr=subprocess.STDOUT,
@@ -508,12 +509,14 @@ def _resume_environment(workdir: str) -> dict[str, str]:
         environment["PATH"] = os.pathsep.join(
             directory
             for directory in environment["PATH"].split(os.pathsep)
-            if not (
-                (Path(workdir, directory) / REPORT_COMMAND).is_file()
-                and (Path(workdir, directory).parent / PLUGIN_MANIFEST).is_file()
-            )
+            if not _is_plugin_bin(Path(workdir, directory))
         )
     return environment
+
+
+def _is_plugin_bin(directory: Path) -> bool:
+    resolved = directory.resolve()
+    return (resolved / REPORT_COMMAND).is_file() and (resolved.parent / PLUGIN_MANIFEST).is_file()
 
 
 def _still_resuming(marker: Path, session: Session) -> bool:

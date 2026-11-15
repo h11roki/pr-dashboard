@@ -24,7 +24,7 @@
 
 - サーバーが裏の `claude` に渡す PATH から、toriage のプラグインの `bin` を外す。`toriage-report` というファイルがあり、その親に `.claude-plugin/plugin.json` があるディレクトリのことで、版や置き場所(プラグインのキャッシュか、手元の checkout か)は見ない。ほかのディレクトリは順番を変えずに残す
 - `toriage-report` があってもプラグインの `bin` でないディレクトリ(`~/.local/bin` に手で置いたときなど)は外さない。`claude` や `gh` が同じ場所にあると、外すとそれらまで見つからなくなるため
-- PATH の相対パス(`bin`、空の項目など)は、裏の `claude` が動く `workdir` から見て確かめる
+- PATH の相対パス(`bin`、空の項目など)は、裏の `claude` が動く `workdir` から見て確かめる。シンボリックリンクと `..` はたどってから確かめる
 - 外したあとは、Claude Code が今有効な版の `bin` を足すので、裏の Claude は今の版の `toriage-report` を使う
 
 ## 理由
