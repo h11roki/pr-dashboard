@@ -21,7 +21,7 @@
 1 にする。
 
 - Host が `127.0.0.1:8787` か `localhost:8787` でない要求は、すべて 403 で断る
-- POST は、Origin が付いていて `http://127.0.0.1:8787` か `http://localhost:8787` でなければ 403 で断る。送信スクリプトの `curl` は Origin を付けないので通る
+- Origin が付いていて `http://127.0.0.1:8787` か `http://localhost:8787` でない要求も 403 で断る。送信スクリプトの `curl` は Origin を付けず、画面からの要求は同じオリジンなので通る
 - POST の本文は `application/json` だけ受け付け、ほかは 415 で断る。ほかのサイトが `application/json` で送ると preflight になり、サーバーは CORS の許可を返さないので、ブラウザが止める
 - 本文は 64 KiB までにする
 - 画面には Content-Security-Policy を付け、ほかのサイトの枠(iframe)に入れさせない
