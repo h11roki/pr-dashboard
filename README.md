@@ -1,0 +1,150 @@
+# PRトリアージ
+
+Claude Code が作った PR を、レビューに出すかどうか手元のブラウザで決める Claude Code のプラグインです。Claude が書いた判断材料をカードで読み、「レビュー依頼」「差し戻し」「保留」のボタンを押すと、その場で GitHub に反映されます。
+
+![未判断の PR がリポジトリごとに並んだ画面](docs/images/overview.png)
+
+## なぜ作ったか
+
+Claude Code に PR を作らせると、PR の数が人の読む速さを超えます。1 件ずつ GitHub を開いて差分を読み、出してよいかを決めるのは重い作業です。
+
+PRトリアージでは、PR を作った Claude 自身が「何を変えたか、なぜ変えたか、どれくらい危ないか、どこを人が見るべきか、テストは通ったか」を書いて送ります。人はそれを読んで、レビューに回すか、直させるか、後回しにするかだけを決めます。
+
+## できること
+
+- **判断材料をカードで読む**: 変更内容、目的、リスク(低・中・高)とその理由、気になる点、テストの結果を 1 枚にまとめます。変更の行数とファイル数は `gh` から取るので、Claude の書き間違いは入りません
+- **ボタンで GitHub に反映する**: 押すとサーバーが手元の `gh` を呼びます。GitHub への反映に失敗したときは判断の状態を変えず、理由を画面に出します
+- **リポジトリごとにまとめる**: 複数のリポジトリで PR を作っていても、リポジトリ名の見出しの下に並びます。スイッチでまとめない表示にも戻せます
+- **手元だけで動く**: サーバーは `127.0.0.1` でだけ待ち受け、データは手元の SQLite に入ります。GitHub の権限は `gh` のログインをそのまま使い、外のサービスには預けません
+- **起動を気にしない**: Claude Code を開くとダッシュボードが裏で起動し、閉じても動き続けます。止まっていても、報告を送るときに起動し直します
+
+判断はカードを開いて、ボタンを押すだけです。差し戻しのときは理由を書き、その文が PR のコメントになります。
+
+![差し戻しの理由を書いているカード](docs/images/decision.png)
+
+画面は OS の設定に合わせてダークモードになり、スマートフォンの幅でも崩れません。
+
+<img src="docs/images/mobile-dark.png" alt="スマートフォンの幅とダークモードで開いた画面" width="320">
+
+## しくみ
+
+```mermaid
+flowchart LR
+  subgraph cc[Claude Code]
+    skill["/pr-dashboard:report"]
+    hook[SessionStart のフック]
+  end
+  report[pr-dashboard-report]
+  server["ダッシュボード<br/>127.0.0.1:8787"]
+  db[(SQLite)]
+  browser[ブラウザ]
+  github[GitHub]
+
+  hook -- 止まっていれば起動 --> server
+  skill -- 判断材料の JSON --> report
+  report -- 変更の数を gh pr view で足す --> server
+  server --> db
+  browser -- 読む、ボタンを押す --> server
+  server -- gh pr ready / edit / comment --> github
+```
+
+1. Claude Code を開くと、フックがダッシュボードのサーバーを裏で起動します
+2. PR を作ったあと、Claude が `/pr-dashboard:report` のスキルに従って判断材料の JSON を書き、`pr-dashboard-report` で送ります
+3. 送る前に、サーバーと同じ検証を通します。ダッシュボードに届かなかったときは inbox に置き、次に起動したときに取り込みます
+4. 人がブラウザで判断すると、サーバーが `gh` で GitHub に反映します
+
+## 必要なもの
+
+- Claude Code
+- [GitHub CLI](https://cli.github.com/)(`gh auth login` 済み)
+- `jq` と `curl`
+- Python 3.13 以上。なければ [uv](https://docs.astral.sh/uv/) が Python 3.13 を用意して動かします
+- macOS か Linux
+
+## 入れ方
+
+Claude Code で次の 2 つを実行します。
+
+```
+/plugin marketplace add h11roki/pr-dashboard
+/plugin install pr-dashboard@h11roki
+```
+
+入れたあと Claude Code を開き直すと、ダッシュボードが起動します。`/pr-dashboard:open` で画面を開けます。
+
+## 使い方
+
+### PR の判断材料を送る
+
+PR を作ったあと、Claude Code に `/pr-dashboard:report` を使わせます。毎回頼まなくて済むよう、`CLAUDE.md` や自分の PR 作成のスキルに次のように書いておくのがおすすめです。
+
+```markdown
+PR を作ったら、/pr-dashboard:report でダッシュボードに判断材料を送る。PR を直したときも送り直す
+```
+
+Claude が書く項目は次のとおりです。題、ブランチ、URL、変更の数は `gh` から自動で足されます。
+
+| 項目 | 内容 |
+|---|---|
+| `summary` | 何を変えたか(1〜3 行) |
+| `why` | 変更の目的、元の依頼 |
+| `risk` | `low` / `medium` / `high`。迷ったら 1 段上 |
+| `risk_reason` | そのリスクにした理由 |
+| `concerns` | 人が必ず見るべき箇所、自信がない点 |
+| `tests` | `passed` / `failed` / `not_run` と、CI を含めた結果 |
+| `suggested_reviewers` | レビュアーの候補(GitHub のユーザー名か `org/team`) |
+| `artifact_url` | 変更の説明を書いたページ(省略可) |
+
+同じ PR を送り直すと、カードは新しい内容に置き換わります。差し戻した PR を直して送り直すと、未判断に戻ります。
+
+### 判断する
+
+http://127.0.0.1:8787 を開き、未判断のカードを開いてボタンを押します。
+
+| ボタン | GitHub で起きること | 移る先 |
+|---|---|---|
+| レビュー依頼 | Draft を外して Ready にし、`suggested_reviewers` をレビュアーに付ける | 依頼済み |
+| 差し戻し | 書いた理由を PR にコメントする | 差し戻し |
+| 保留 | 何もしない | 保留 |
+
+ボタンが出るのは未判断と保留のカードだけです。保留のカードからは、あとでレビュー依頼か差し戻しを選べます。
+
+PR は Draft で作るのがおすすめです。判断するまでレビュアーに通知が飛ばず、「レビュー依頼」を押したときにはじめて Ready になります。
+
+## データと起動
+
+データは `~/.local/share/pr-dashboard/` に置きます。`PR_DASHBOARD_HOME` を絶対パスで設定するとその場所に、`XDG_DATA_HOME` を絶対パスで設定しているとその下に置きます。
+
+| ファイル | 中身 |
+|---|---|
+| `prs.db` | 報告と判断。消せばリセットできる |
+| `inbox/` | 届かなかった報告。次に起動したときに取り込む |
+| `server.log` | サーバーの記録。起動できなかった理由もここに出る |
+| `server.pid` | 動いているサーバーのプロセス番号。サーバーが起動したときに書く |
+
+プラグインを更新したあとは、動いているサーバーが古いままです。Claude に `pr-dashboard-start --restart` を実行させて起動し直します(`bin/` のコマンドは、プラグインが有効なあいだ Claude の Bash から使えます)。止められなかったときは、理由を出して失敗します。
+
+止めるときは `server.pid` のプロセスを止めます。既定の場所なら `kill "$(cat ~/.local/share/pr-dashboard/server.pid)"` です。プラグインを消してもデータは残るので、要らなければ手で消してください。
+
+## 安全のために
+
+- サーバーは `127.0.0.1:8787` でだけ待ち受けます
+- ほかのサイトからの要求を断るため、Host、Origin、Content-Type を確かめます
+- GitHub への操作は、ボタンを押したときにだけ、その PR のリポジトリを `-R` で指定して `gh` で行います
+- サーバーは `GH_TOKEN` と `GITHUB_TOKEN` を外して起動するので、どのセッションから起動しても `gh auth login` のアカウントで操作します
+- 差し戻しの理由は PR のコメントとして公開されます。リポジトリを見られる人に読まれてよいことだけを書いてください
+
+## 開発
+
+```sh
+uv sync
+uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest
+```
+
+手元のコードを試すときは `claude --plugin-dir .` で Claude Code を開きます。サーバーだけなら `python3 server.py` で起動できます。
+
+実行時は Python の標準ライブラリだけを使い、画面は `static/index.html` 1 ファイルの HTML と素の JavaScript です。見た目は [shadcn/ui](https://ui.shadcn.com/) の色と部品の形を CSS で写しています。設計判断は [docs/adr/](docs/adr/README.md) にあります。
+
+## ライセンス
+
+[MIT](LICENSE)

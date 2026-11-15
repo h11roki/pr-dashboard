@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(CDPATH='' cd -- "$(dirname -- "$(readlink -f -- "$0")")/.." && pwd -P)"
+home="$("$root/libexec/pr-dashboard-home")"
+url="http://127.0.0.1:8787"
+
+fail() {
+  echo "$1" >&2
+  exit 1
+}
+
+running() {
+  curl -sf --noproxy '*' --max-time 1 -o /dev/null "$url/api/prs"
+}
+
+if [ "${1:-}" = "--restart" ]; then
+  pid="$(cat "$home/server.pid" 2>/dev/null)" || pid=""
+  command_line="$(ps -p "$pid" -o command= 2>/dev/null)" || command_line=""
+  if [[ "$command_line" == *pr-dashboard*/server.py* ]]; then
+    kill "$pid" 2>/dev/null || true
+  fi
+  deadline=$((SECONDS + 5))
+  while running && [ "$SECONDS" -lt "$deadline" ]; do
+    sleep 0.25
+  done
+  if running; then
+    fail "動いているダッシュボードを止められなかった。$url を使っているプロセスを止めてから起動し直す"
+  fi
+fi
+
+if running; then
+  exit 0
+fi
+
+mkdir -p "$home"
+cd "$home"
+env -u GH_TOKEN -u GITHUB_TOKEN nohup "$root/libexec/pr-dashboard-python" -I -u "$root/server.py" \
+  >>"$home/server.log" 2>&1 </dev/null &
+launched=$!
+deadline=$((SECONDS + 10))
+until running; do
+  if ! kill -0 "$launched" 2>/dev/null; then
+    running || fail "ダッシュボードを起動できなかった。理由は $home/server.log にある"
+    exit 0
+  fi
+  if [ "$SECONDS" -ge "$deadline" ]; then
+    fail "ダッシュボードの起動に時間がかかっている。様子は $home/server.log にある"
+  fi
+  sleep 0.25
+done

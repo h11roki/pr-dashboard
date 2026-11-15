@@ -1,10 +1,33 @@
+import os
+import signal
+import socket
 import threading
+import time
 from collections.abc import Callable, Iterator
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
 
-from server import ROOT, DashboardServer, GhFailed, TriageStore
+from server import HOST, PORT, ROOT, DashboardServer, GhFailed, TriageStore
+
+
+def dashboard_is_listening() -> bool:
+    with socket.socket() as probe:
+        return probe.connect_ex((HOST, PORT)) == 0
+
+
+@pytest.fixture
+def dashboard_home(tmp_path: Path) -> Iterator[Path]:
+    if dashboard_is_listening():
+        pytest.skip(f"{HOST}:{PORT} でダッシュボードが動いているので、起動は試さない")
+    home = tmp_path / "home"
+    yield home
+    with suppress(FileNotFoundError, ProcessLookupError):
+        os.kill(int((home / "server.pid").read_text(encoding="utf-8")), signal.SIGTERM)
+    deadline = time.monotonic() + 5
+    while dashboard_is_listening() and time.monotonic() < deadline:
+        time.sleep(0.1)
 
 
 @pytest.fixture

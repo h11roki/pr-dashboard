@@ -1,13 +1,14 @@
 import json
 import os
 import sqlite3
+import subprocess
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from server import MAX_BODY_BYTES, TriageStore, import_inbox, parse_report
+from server import MAX_BODY_BYTES, ROOT, TriageStore, data_home, import_inbox, parse_report
 
 MORNING = datetime(2026, 11, 15, 9, 0, 0, 123456, tzinfo=UTC)
 NOON = MORNING + timedelta(hours=3)
@@ -123,3 +124,30 @@ def test_a_report_left_in_the_inbox_does_not_undo_a_newer_one(
 
 def test_a_missing_inbox_imports_nothing(tmp_path: Path, store: TriageStore) -> None:
     assert import_inbox(tmp_path / "inbox", store) == 0
+
+
+@pytest.mark.parametrize(
+    ("environment", "expected"),
+    [
+        ({"PR_DASHBOARD_HOME": "/srv/dashboard", "XDG_DATA_HOME": "/xdg"}, "/srv/dashboard"),
+        ({"XDG_DATA_HOME": "/xdg"}, "/xdg/pr-dashboard"),
+        ({"PR_DASHBOARD_HOME": "dashboard", "XDG_DATA_HOME": "/xdg"}, "/xdg/pr-dashboard"),
+        ({"XDG_DATA_HOME": "relative/share"}, "/home/someone/.local/share/pr-dashboard"),
+        ({}, "/home/someone/.local/share/pr-dashboard"),
+    ],
+)
+def test_the_server_and_the_scripts_agree_on_where_the_data_lives(
+    monkeypatch: pytest.MonkeyPatch, environment: dict[str, str], expected: str
+) -> None:
+    monkeypatch.setenv("HOME", "/home/someone")
+    monkeypatch.delenv("PR_DASHBOARD_HOME", raising=False)
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+
+    from_scripts = subprocess.run(
+        [ROOT / "libexec" / "pr-dashboard-home"], capture_output=True, text=True, check=True
+    ).stdout
+
+    assert data_home() == Path(expected)
+    assert from_scripts == f"{expected}\n"

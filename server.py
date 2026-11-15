@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import sqlite3
 import subprocess
@@ -556,10 +557,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+def data_home() -> Path:
+    home = Path(os.environ.get("PR_DASHBOARD_HOME", ""))
+    if home.is_absolute():
+        return home
+    shared = Path(os.environ.get("XDG_DATA_HOME", ""))
+    if not shared.is_absolute():
+        shared = Path.home() / ".local" / "share"
+    return shared / "pr-dashboard"
+
+
 def main() -> None:
-    store = TriageStore(ROOT / "data" / "prs.db")
+    home = data_home()
+    store = TriageStore(home / "prs.db")
     server = DashboardServer(PORT, store, ROOT / "static" / "index.html", run_gh)
-    imported = import_inbox(ROOT / "inbox", store)
+    (home / "server.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+    imported = import_inbox(home / "inbox", store)
     if imported:
         print(f"inbox から {imported} 件取り込んだ")
     print(f"http://{HOST}:{PORT} で待ち受けている")
