@@ -1,25 +1,12 @@
 import json
 import socket
-import threading
-from collections.abc import Iterator
 from http.client import HTTPConnection
 
 import pytest
 
-from server import HOST, MAX_BODY_BYTES, ROOT, DashboardHandler, DashboardServer, TriageStore
+from server import HOST, MAX_BODY_BYTES, DashboardHandler, TriageStore
 
 CLIENT_TIMEOUT_SECONDS = 5
-
-
-@pytest.fixture
-def port(store: TriageStore) -> Iterator[int]:
-    server = DashboardServer(0, store, ROOT / "static" / "index.html")
-    thread = threading.Thread(target=server.serve_forever)
-    thread.start()
-    yield server.server_port
-    server.shutdown()
-    thread.join()
-    server.server_close()
 
 
 def send(

@@ -1,6 +1,10 @@
+import json
+import subprocess
+import sys
+
 import pytest
 
-from server import InvalidReport, parse_report
+from server import MAX_BODY_BYTES, ROOT, InvalidReport, parse_body, parse_report
 
 
 def test_accepts_the_example_from_the_design(report: dict[str, object]) -> None:
@@ -68,3 +72,53 @@ def test_rejects_an_invalid_field(
 
     with pytest.raises(InvalidReport, match=named):
         parse_report(report)
+
+
+@pytest.mark.parametrize(
+    ("body", "named"),
+    [
+        (b" " * (MAX_BODY_BYTES + 1), "バイト"),
+        (b"{", "JSON"),
+        (b"\xff", "JSON"),
+        (b"[" * 50_000, "JSON"),
+    ],
+)
+def test_rejects_a_body_that_cannot_be_a_report(body: bytes, named: str) -> None:
+    with pytest.raises(InvalidReport, match=named):
+        parse_body(body)
+
+
+def run_check(report: dict[str, object]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-I", str(ROOT / "server.py"), "--check"],
+        input=json.dumps(report),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_the_check_command_accepts_a_valid_report(report: dict[str, object]) -> None:
+    result = run_check(report)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_the_check_command_explains_an_invalid_report(report: dict[str, object]) -> None:
+    result = run_check(report | {"risk": "critical"})
+
+    assert result.returncode == 1
+    assert "risk" in result.stderr
+
+
+def test_an_unknown_argument_does_not_start_the_server() -> None:
+    result = subprocess.run(
+        [sys.executable, "-I", str(ROOT / "server.py"), "--chek"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 1
+    assert "使い方" in result.stderr

@@ -44,3 +44,4 @@
 | [0003](0003-refuse-foreign-requests.md) | サーバーは Host、Origin、Content-Type を確かめ、ほかのサイトからの要求を断る | 提案 |
 | [0004](0004-shadcn-look-in-plain-css.md) | 画面の見た目は shadcn/ui に合わせ、React を使わずに CSS で写す | 承認 |
 | [0005](0005-group-by-project.md) | PR はリポジトリごとにまとめて見せ、スイッチでまとめない表示に戻せるようにする | 承認 |
+| [0006](0006-report-script-failures.md) | 送信スクリプトは送る前にサーバーと同じ検証をし、届かなかったと分かるときだけ inbox に置く | 承認 |
