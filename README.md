@@ -113,16 +113,18 @@ PR は Draft で作るのがおすすめです。判断するまでレビュア�
 
 ## データと起動
 
-データは `~/.local/share/pr-dashboard/` に置きます。`PR_DASHBOARD_HOME` を設定するとその場所に、`XDG_DATA_HOME` を設定しているとその下に置きます。
+データは `~/.local/share/pr-dashboard/` に置きます。`PR_DASHBOARD_HOME` を設定するとその場所に、`XDG_DATA_HOME` を絶対パスで設定しているとその下に置きます。
 
 | ファイル | 中身 |
 |---|---|
 | `prs.db` | 報告と判断。消せばリセットできる |
 | `inbox/` | 届かなかった報告。次に起動したときに取り込む |
-| `server.log` | サーバーの記録 |
-| `server.pid` | 動いているサーバーのプロセス番号 |
+| `server.log` | サーバーの記録。起動できなかった理由もここに出る |
+| `server.pid` | 動いているサーバーのプロセス番号。サーバーが起動したときに書く |
 
-プラグインを更新したあとは、動いているサーバーが古いままです。Claude に `pr-dashboard-start --restart` を実行させて起動し直します(`bin/` のコマンドは、プラグインが有効なあいだ Claude の Bash から使えます)。止めるときは `kill "$(cat ~/.local/share/pr-dashboard/server.pid)"` です。プラグインを消してもデータは残るので、要らなければ手で消してください。
+プラグインを更新したあとは、動いているサーバーが古いままです。Claude に `pr-dashboard-start --restart` を実行させて起動し直します(`bin/` のコマンドは、プラグインが有効なあいだ Claude の Bash から使えます)。止められなかったときは、理由を出して失敗します。
+
+止めるときは `server.pid` のプロセスを止めます。既定の場所なら `kill "$(cat ~/.local/share/pr-dashboard/server.pid)"` です。プラグインを消してもデータは残るので、要らなければ手で消してください。
 
 ## 安全のために
 

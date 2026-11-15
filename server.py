@@ -560,14 +560,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
 def data_home() -> Path:
     if home := os.environ.get("PR_DASHBOARD_HOME"):
         return Path(home)
-    shared = os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share"
-    return Path(shared) / "pr-dashboard"
+    shared = Path(os.environ.get("XDG_DATA_HOME", ""))
+    if not shared.is_absolute():
+        shared = Path.home() / ".local" / "share"
+    return shared / "pr-dashboard"
 
 
 def main() -> None:
     home = data_home()
     store = TriageStore(home / "prs.db")
     server = DashboardServer(PORT, store, ROOT / "static" / "index.html", run_gh)
+    (home / "server.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
     imported = import_inbox(home / "inbox", store)
     if imported:
         print(f"inbox から {imported} 件取り込んだ")

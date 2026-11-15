@@ -21,7 +21,7 @@ python="$root/libexec/pr-dashboard-python"
 "$python" -c 'pass' || exit 1
 dashboard="${PR_DASHBOARD_URL:-http://127.0.0.1:8787}"
 dashboard="${dashboard%/}"
-inbox="${PR_DASHBOARD_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/pr-dashboard}/inbox"
+inbox="$("$root/libexec/pr-dashboard-home")/inbox"
 
 judgment="$(cat)"
 jq -e -s 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1 <<<"$judgment" ||
@@ -48,22 +48,18 @@ problem="$("$python" -I "$root/server.py" --check 2>&1 <<<"$body")" ||
   fail "報告が検証に通らない: $problem"
 
 response="$(mktemp)"
-trap 'rm -f "$response"' EXIT
+errors="$(mktemp)"
+trap 'rm -f "$response" "$errors"' EXIT
 
 post() {
   curl_exit=0
-  status="$(curl -s --noproxy '*' --max-time 10 -o "$response" -w '%{http_code}' \
+  status="$(curl -sS --noproxy '*' --max-time 10 -o "$response" -w '%{http_code}' \
     -X POST "$dashboard/api/prs" -H 'Content-Type: application/json' \
-    --data-binary @- <<<"$body")" || curl_exit=$?
+    --data-binary @- <<<"$body" 2>"$errors")" || curl_exit=$?
 }
 
 post
-if [ "$curl_exit" -eq 7 ] && [ -z "${PR_DASHBOARD_URL:-}" ]; then
-  "$root/bin/pr-dashboard-start"
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    curl -s --noproxy '*' --max-time 1 -o /dev/null "$dashboard/api/prs" && break
-    sleep 0.5
-  done
+if [ "$curl_exit" -eq 7 ] && [ -z "${PR_DASHBOARD_URL:-}" ] && "$root/bin/pr-dashboard-start"; then
   post
 fi
 
@@ -76,7 +72,7 @@ case "$curl_exit" in
     exit 0
     ;;
   *)
-    fail "ダッシュボードに届いたか分からない(curl $curl_exit)。送り直してよい"
+    fail "ダッシュボードに届いたか分からない。送り直してよい: $(cat "$errors")"
     ;;
 esac
 [ "$status" = "200" ] || fail "ダッシュボードに断られた($status): $(cat "$response")"
