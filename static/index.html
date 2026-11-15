@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PRトリアージ</title>
+<title>toriage</title>
 <style>
   :root {
     color-scheme: light;
@@ -383,7 +383,7 @@
 <body>
 <div class="page">
   <header class="page-header">
-    <h1>PRトリアージ</h1>
+    <h1>toriage</h1>
     <p>Claude Code が作った PR を読み、レビューに出すかを決める</p>
   </header>
   <div class="toolbar">
@@ -504,7 +504,7 @@
   const template = document.getElementById("card-template");
   const projectTemplate = document.getElementById("project-template");
   const groupSwitch = document.getElementById("group-by-project");
-  const GROUPING_KEY = "pr-dashboard:group-by-project";
+  const GROUPING_KEY = "toriage:group-by-project";
   let selectedStatus = "pending";
   let triages = [];
   let latestRequest = 0;

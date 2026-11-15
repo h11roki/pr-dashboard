@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [ $# -ne 1 ]; then
-  echo "使い方: pr-dashboard-report <PR番号> < 判断材料.json" >&2
+  echo "使い方: toriage-report <PR番号> < 判断材料.json" >&2
   exit 2
 fi
 
@@ -17,11 +17,11 @@ done
 
 script="$(readlink -f -- "$0")" || fail "スクリプトの置き場所が分からない"
 root="$(CDPATH='' cd -- "$(dirname -- "$script")/.." && pwd -P)"
-python="$root/libexec/pr-dashboard-python"
+python="$root/libexec/toriage-python"
 "$python" -c 'pass' || exit 1
-dashboard="${PR_DASHBOARD_URL:-http://127.0.0.1:8787}"
+dashboard="${TORIAGE_URL:-http://127.0.0.1:8787}"
 dashboard="${dashboard%/}"
-inbox="$("$root/libexec/pr-dashboard-home")/inbox"
+inbox="$("$root/libexec/toriage-home")/inbox"
 
 judgment="$(cat)"
 jq -e -s 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1 <<<"$judgment" ||
@@ -59,7 +59,7 @@ post() {
 }
 
 post
-if [ "$curl_exit" -eq 7 ] && [ -z "${PR_DASHBOARD_URL:-}" ] && "$root/bin/pr-dashboard-start"; then
+if [ "$curl_exit" -eq 7 ] && [ -z "${TORIAGE_URL:-}" ] && "$root/bin/toriage-start"; then
   post
 fi
 

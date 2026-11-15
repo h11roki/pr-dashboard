@@ -129,24 +129,24 @@ def test_a_missing_inbox_imports_nothing(tmp_path: Path, store: TriageStore) -> 
 @pytest.mark.parametrize(
     ("environment", "expected"),
     [
-        ({"PR_DASHBOARD_HOME": "/srv/dashboard", "XDG_DATA_HOME": "/xdg"}, "/srv/dashboard"),
-        ({"XDG_DATA_HOME": "/xdg"}, "/xdg/pr-dashboard"),
-        ({"PR_DASHBOARD_HOME": "dashboard", "XDG_DATA_HOME": "/xdg"}, "/xdg/pr-dashboard"),
-        ({"XDG_DATA_HOME": "relative/share"}, "/home/someone/.local/share/pr-dashboard"),
-        ({}, "/home/someone/.local/share/pr-dashboard"),
+        ({"TORIAGE_HOME": "/srv/dashboard", "XDG_DATA_HOME": "/xdg"}, "/srv/dashboard"),
+        ({"XDG_DATA_HOME": "/xdg"}, "/xdg/toriage"),
+        ({"TORIAGE_HOME": "dashboard", "XDG_DATA_HOME": "/xdg"}, "/xdg/toriage"),
+        ({"XDG_DATA_HOME": "relative/share"}, "/home/someone/.local/share/toriage"),
+        ({}, "/home/someone/.local/share/toriage"),
     ],
 )
 def test_the_server_and_the_scripts_agree_on_where_the_data_lives(
     monkeypatch: pytest.MonkeyPatch, environment: dict[str, str], expected: str
 ) -> None:
     monkeypatch.setenv("HOME", "/home/someone")
-    monkeypatch.delenv("PR_DASHBOARD_HOME", raising=False)
+    monkeypatch.delenv("TORIAGE_HOME", raising=False)
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
     for name, value in environment.items():
         monkeypatch.setenv(name, value)
 
     from_scripts = subprocess.run(
-        [ROOT / "libexec" / "pr-dashboard-home"], capture_output=True, text=True, check=True
+        [ROOT / "libexec" / "toriage-home"], capture_output=True, text=True, check=True
     ).stdout
 
     assert data_home() == Path(expected)

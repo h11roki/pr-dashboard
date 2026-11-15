@@ -8,7 +8,7 @@ import pytest
 
 from server import HOST, ROOT, TriageStore
 
-SCRIPT = ROOT / "bin" / "pr-dashboard-report"
+SCRIPT = ROOT / "bin" / "toriage-report"
 REFUSED = f"http://{HOST}:1"
 FACTS_FROM_GH = ("repo", "number", "url", "title", "branch", "changes")
 GH_PR_VIEW = {
@@ -45,11 +45,11 @@ def run_script(
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ | {
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
-        "PR_DASHBOARD_HOME": str(home),
+        "TORIAGE_HOME": str(home),
     }
-    environment.pop("PR_DASHBOARD_URL", None)
+    environment.pop("TORIAGE_URL", None)
     if dashboard is not None:
-        environment["PR_DASHBOARD_URL"] = dashboard
+        environment["TORIAGE_URL"] = dashboard
     return subprocess.run(
         [str(SCRIPT), *args],
         input=judgment,

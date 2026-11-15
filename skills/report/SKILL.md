@@ -1,7 +1,7 @@
 ---
 name: report
-description: PR を作ったあと、その PR の判断材料(何を変えたか、目的、リスク、気になる点、テスト)を PR トリアージのダッシュボードに送る。PR を出したとき、PR を直して出し直したとき、ダッシュボードに報告するよう頼まれたときに使う
-allowed-tools: Bash(pr-dashboard-report *)
+description: PR を作ったあと、その PR の判断材料(何を変えたか、目的、リスク、気になる点、テスト)を toriage のダッシュボードに送る。PR を出したとき、PR を直して出し直したとき、ダッシュボードに報告するよう頼まれたときに使う
+allowed-tools: Bash(toriage-report *)
 ---
 
 # PR の判断材料をダッシュボードに送る
@@ -23,7 +23,7 @@ PR を作った人が「レビューに出すか」をすぐ決められるよ�
    | `suggested_reviewers` | 文字列の配列 | レビュアーの候補の GitHub のユーザー名か `org/team`。なければ空の配列 |
    | `artifact_url` | 文字列(省略可) | 変更の説明を書いたページがあれば、その `https://` の URL |
 
-2. PR のリポジトリの中で `pr-dashboard-report <PR番号> < <JSON のファイル>` を実行する
+2. PR のリポジトリの中で `toriage-report <PR番号> < <JSON のファイル>` を実行する
 3. 終わり方に応じて次のようにする
    - 0 で「送った」: 終わり
    - 0 で「inbox に保存した」: ダッシュボードが起動できなかった。次に起動したときに取り込まれることを、報告に書く

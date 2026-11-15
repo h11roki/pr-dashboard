@@ -7,5 +7,5 @@ fi
 if command -v uv >/dev/null; then
   exec uv run --quiet --no-project --python 3.13 python "$@"
 fi
-echo "PR トリアージには python3 3.13 以上か uv が要る(今の python3 は $(python3 --version 2>/dev/null || echo 'なし'))" >&2
+echo "toriage には python3 3.13 以上か uv が要る(今の python3 は $(python3 --version 2>/dev/null || echo 'なし'))" >&2
 exit 1

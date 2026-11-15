@@ -4,7 +4,7 @@
   "description": "h11roki の Claude Code プラグイン",
   "plugins": [
     {
-      "name": "pr-dashboard",
+      "name": "toriage",
       "source": "./",
       "description": "Claude Code が作った PR の判断材料を手元のダッシュボードに集め、その場で GitHub に反映する"
     }

@@ -482,6 +482,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._reject(HTTPStatus.FORBIDDEN, "ほかのサイトからの要求は受け付けない")
         elif path == "/api/prs":
             self._receive_report()
+        elif path == "/api/shutdown":
+            self._send_json(HTTPStatus.OK, {})
+            self.server.shutdown()
         elif action:
             self._decide(int(action[1]), Action(action[2]))
         else:
@@ -558,26 +561,28 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 
 def data_home() -> Path:
-    home = Path(os.environ.get("PR_DASHBOARD_HOME", ""))
+    home = Path(os.environ.get("TORIAGE_HOME", ""))
     if home.is_absolute():
         return home
     shared = Path(os.environ.get("XDG_DATA_HOME", ""))
     if not shared.is_absolute():
         shared = Path.home() / ".local" / "share"
-    return shared / "pr-dashboard"
+    return shared / "toriage"
 
 
 def main() -> None:
     home = data_home()
     store = TriageStore(home / "prs.db")
     server = DashboardServer(PORT, store, ROOT / "static" / "index.html", run_gh)
-    (home / "server.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+    pid_file = home / "server.pid"
+    pid_file.write_text(f"{os.getpid()}\n", encoding="utf-8")
     imported = import_inbox(home / "inbox", store)
     if imported:
         print(f"inbox から {imported} 件取り込んだ")
     print(f"http://{HOST}:{PORT} で待ち受けている")
     with suppress(KeyboardInterrupt):
         server.serve_forever()
+    pid_file.unlink(missing_ok=True)
     server.server_close()
     store.close()
 
