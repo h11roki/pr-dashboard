@@ -14,8 +14,8 @@ from server import (
     PORT,
     ROOT,
     DashboardServer,
+    DecisionError,
     GhFailed,
-    ResumeFailed,
     ResumeSession,
     Session,
     TriageStore,
@@ -100,17 +100,17 @@ def resumed() -> list[tuple[Session, str]]:
 
 
 @pytest.fixture
-def resume_failures() -> list[str]:
+def resume_failures() -> list[DecisionError]:
     return []
 
 
 @pytest.fixture
 def recording_resume(
-    resumed: list[tuple[Session, str]], resume_failures: list[str]
+    resumed: list[tuple[Session, str]], resume_failures: list[DecisionError]
 ) -> ResumeSession:
     def resume(session: Session, prompt: str) -> None:
         if resume_failures:
-            raise ResumeFailed(resume_failures[0])
+            raise resume_failures[0]
         resumed.append((session, prompt))
 
     return resume

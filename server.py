@@ -43,7 +43,11 @@ INHERITED_SESSION_VARIABLES = frozenset(
         "CLAUDE_CODE_SESSION_ATTENDED",
         "CLAUDE_CODE_SESSION_ID",
         "CLAUDE_EFFORT",
+        "CLAUDE_ENV_FILE",
         "CLAUDE_PID",
+        "CLAUDE_PLUGIN_DATA",
+        "CLAUDE_PLUGIN_ROOT",
+        "CLAUDE_PROJECT_DIR",
     }
 )
 RETURN_PROMPT = """toriage で {url} が差し戻されました。
@@ -119,6 +123,7 @@ class Action(StrEnum):
 ALLOWED_ACTIONS: dict[str, tuple[Action, ...]] = {
     "pending": (Action.REQUEST_REVIEW, Action.RETURN, Action.HOLD),
     "on_hold": (Action.REQUEST_REVIEW, Action.RETURN),
+    "returned": (Action.RETURN,),
 }
 
 
@@ -152,6 +157,10 @@ class GhFailed(DecisionError):
 
 class ResumeFailed(DecisionError):
     status = HTTPStatus.BAD_GATEWAY
+
+
+class SessionBusy(DecisionError):
+    status = HTTPStatus.CONFLICT
 
 
 @dataclass(frozen=True)
@@ -266,14 +275,19 @@ def _https_url(data: dict[str, object], key: str) -> str:
     return value
 
 
-def _session(data: dict[str, object]) -> Session:
-    session_id = _field(data, "id", str)
-    if not SESSION_ID_PATTERN.fullmatch(session_id):
-        raise InvalidReport("session.id は Claude Code のセッション ID で指定する")
-    workdir = _field(data, "workdir", str)
-    if not Path(workdir).is_absolute() or "\0" in workdir:
-        raise InvalidReport("session.workdir は絶対パスで指定する")
+def _session_or_none(value: object) -> Session | None:
+    if not isinstance(value, dict):
+        return None
+    session_id, workdir = value.get("id"), value.get("workdir")
+    if not isinstance(session_id, str) or not SESSION_ID_PATTERN.fullmatch(session_id):
+        return None
+    if not isinstance(workdir, str) or not Path(workdir).is_absolute() or "\0" in workdir:
+        return None
     return Session(id=session_id, workdir=workdir)
+
+
+def pull_request_url(repo: str, number: int) -> str:
+    return f"https://github.com/{repo}/pull/{number}"
 
 
 def parse_report(raw: object) -> Report:
@@ -290,8 +304,8 @@ def parse_report(raw: object) -> Report:
     if not 1 <= number <= MAX_INTEGER:
         raise InvalidReport(f"number は 1〜{MAX_INTEGER} で指定する")
     url = _field(raw, "url", str)
-    if url != f"https://github.com/{repo}/pull/{number}":
-        raise InvalidReport(f"url は https://github.com/{repo}/pull/{number} にする")
+    if url != pull_request_url(repo, number):
+        raise InvalidReport(f"url は {pull_request_url(repo, number)} にする")
     summary = _texts(raw, "summary")
     if not 1 <= len(summary) <= MAX_SUMMARY_LINES:
         raise InvalidReport(f"summary は 1〜{MAX_SUMMARY_LINES} 行で書く")
@@ -322,7 +336,7 @@ def parse_report(raw: object) -> Report:
         ),
         suggested_reviewers=reviewers,
         artifact_url=None if raw.get("artifact_url") is None else _https_url(raw, "artifact_url"),
-        session=None if raw.get("session") is None else _session(_field(raw, "session", dict)),
+        session=_session_or_none(raw.get("session")),
     )
 
 
@@ -368,11 +382,7 @@ class TriageStore:
     def _triage(row: sqlite3.Row) -> Triage:
         report = json.loads(row["payload"])
         stored = report.get("suggested_reviewers") if isinstance(report, dict) else None
-        stored_session = report.get("session") if isinstance(report, dict) else None
-        try:
-            session = _session(stored_session) if isinstance(stored_session, dict) else None
-        except InvalidReport:
-            session = None
+        session = _session_or_none(report.get("session") if isinstance(report, dict) else None)
         return Triage(
             id=row["id"],
             repo=row["repo"],
@@ -433,23 +443,22 @@ def run_gh(arguments: list[str], stdin: str) -> None:
 
 
 def resume_in_background(logs: Path) -> ResumeSession:
-    running: set[str] = set()
     lock = threading.Lock()
 
-    def wait_and_record(session: Session, process: subprocess.Popen[bytes], log: Path) -> None:
+    def wait_and_record(process: subprocess.Popen[bytes], log: Path, marker: Path) -> None:
         code = process.wait()
-        with lock:
-            running.discard(session.id)
         with log.open("a", encoding="utf-8") as output:
             output.write(f"{_now()} に終わった(終了コード {code})\n")
+        marker.unlink(missing_ok=True)
 
     def resume(session: Session, prompt: str) -> None:
         if not Path(session.workdir).is_dir():
             raise ResumeFailed(f"PR を作った場所 {session.workdir} がもうない")
         log = logs / f"{session.id}.log"
+        marker = logs / f"{session.id}.pid"
         with lock:
-            if session.id in running:
-                raise ResumeFailed("この会話は前の差し戻しをまだ直している。終わってから差し戻す")
+            if _still_running(marker):
+                raise SessionBusy("この会話は前の差し戻しをまだ直している。終わってから差し戻す")
             try:
                 logs.mkdir(parents=True, exist_ok=True)
                 with log.open("a", encoding="utf-8") as output:
@@ -478,12 +487,20 @@ def resume_in_background(logs: Path) -> ResumeSession:
                         stderr=subprocess.STDOUT,
                         start_new_session=True,
                     )
+                marker.write_text(f"{process.pid}\n", encoding="utf-8")
             except OSError as error:
                 raise ResumeFailed(f"Claude Code を起動できなかった: {error}") from error
-            running.add(session.id)
-        threading.Thread(target=wait_and_record, args=(session, process, log), daemon=True).start()
+        threading.Thread(target=wait_and_record, args=(process, log, marker), daemon=True).start()
 
     return resume
+
+
+def _still_running(marker: Path) -> bool:
+    try:
+        os.kill(int(marker.read_text(encoding="utf-8")), 0)
+    except (OSError, ValueError):
+        return False
+    return True
 
 
 def _now() -> str:
@@ -534,8 +551,8 @@ def decide(
             if not request.reason.strip() or len(request.reason) > MAX_REASON_LENGTH:
                 raise InvalidReason(f"差し戻す理由は 1〜{MAX_REASON_LENGTH} 字で書く")
             assert triage.session is not None
-            pr_url = f"https://github.com/{triage.repo}/pull/{triage.number}"
-            resume(triage.session, RETURN_PROMPT.format(url=pr_url, reason=request.reason))
+            url = pull_request_url(triage.repo, triage.number)
+            resume(triage.session, RETURN_PROMPT.format(url=url, reason=request.reason))
             status, note = "returned", request.reason
         case Action.HOLD:
             status, note = "on_hold", None

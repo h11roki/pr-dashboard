@@ -83,11 +83,17 @@ def test_sends_the_judgment_with_the_facts_from_gh(
     assert triage.report == report
 
 
-def test_attaches_the_claude_code_session_it_runs_in(
+def checkout_of(tmp_path: Path, branch: str) -> Path:
+    worktree = tmp_path / "worktree"
+    (worktree / "docs").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", "-b", branch, str(worktree)], check=True)
+    return worktree
+
+
+def test_attaches_the_claude_code_session_and_the_checkout_of_the_pr(
     tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
 ) -> None:
-    workdir = tmp_path / "worktree"
-    workdir.mkdir()
+    worktree = checkout_of(tmp_path, "feat/search-paging")
 
     result = run_script(
         fake_gh,
@@ -96,12 +102,32 @@ def test_attaches_the_claude_code_session_it_runs_in(
         tmp_path / "home",
         "128",
         session_id=SESSION_ID,
-        cwd=workdir,
+        cwd=worktree / "docs",
     )
 
     assert result.returncode == 0, result.stderr
     [triage] = store.list_triages()
-    assert triage.session == Session(id=SESSION_ID, workdir=str(workdir.resolve()))
+    assert triage.session == Session(id=SESSION_ID, workdir=str(worktree.resolve()))
+
+
+def test_does_not_attach_the_session_outside_the_branch_of_the_pr(
+    tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
+) -> None:
+    main_checkout = checkout_of(tmp_path, "main")
+
+    result = run_script(
+        fake_gh,
+        json.dumps(judgment_of(report)),
+        f"http://{HOST}:{port}",
+        tmp_path / "home",
+        "128",
+        session_id=SESSION_ID,
+        cwd=main_checkout,
+    )
+
+    assert result.returncode == 0, result.stderr
+    [triage] = store.list_triages()
+    assert triage.session is None
 
 
 def test_sends_without_a_session_when_the_session_id_is_not_a_uuid(
@@ -114,6 +140,7 @@ def test_sends_without_a_session_when_the_session_id_is_not_a_uuid(
         tmp_path / "home",
         "128",
         session_id="--dangerously-skip-permissions",
+        cwd=checkout_of(tmp_path, "feat/search-paging"),
     )
 
     assert result.returncode == 0, result.stderr

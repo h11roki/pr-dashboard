@@ -13,9 +13,12 @@ from server import (
     HOST,
     MAX_REASON_LENGTH,
     Action,
+    DecisionError,
     DecisionRequest,
+    ResumeFailed,
     ResumeSession,
     Session,
+    SessionBusy,
     Triage,
     TriageStore,
     decide,
@@ -178,17 +181,46 @@ def test_a_stored_session_that_no_longer_passes_is_left_out(
     assert Action.RETURN not in triage.actions
 
 
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (ResumeFailed("PR を作った場所 /work/web がもうない"), 502),
+        (SessionBusy("この会話は前の差し戻しをまだ直している"), 409),
+    ],
+)
 def test_a_session_that_cannot_be_resumed_leaves_the_status_alone(
-    port: int, store: TriageStore, report: dict[str, object], resume_failures: list[str]
+    port: int,
+    store: TriageStore,
+    report: dict[str, object],
+    resume_failures: list[DecisionError],
+    failure: DecisionError,
+    expected: int,
 ) -> None:
     triage = save_pending(store, from_a_session(report))
-    resume_failures.append("PR を作った場所 /work/web がもうない")
+    resume_failures.append(failure)
 
     status, body = post_decision(port, triage, "return", "テストが足りない")
 
-    assert status == 502
-    assert "/work/web" in body["error"]
+    assert status == expected
+    assert body["error"] == str(failure)
     assert status_of(store, triage) == "pending"
+
+
+def test_a_returned_pr_can_be_returned_again_when_the_session_stopped(
+    port: int, store: TriageStore, report: dict[str, object], resumed: Resumed
+) -> None:
+    triage = save_pending(store, from_a_session(report))
+    post_decision(port, triage, "return", "テストが足りない")
+    [returned] = store.list_triages()
+
+    status, _ = post_decision(port, returned, "return", "もう一度直して")
+
+    assert returned.actions == (Action.RETURN,)
+    assert status == 200
+    assert [prompt for _, prompt in resumed][-1].count("もう一度直して") == 1
+    found = store.find(triage.id)
+    assert found is not None
+    assert (found.status, found.note) == ("returned", "もう一度直して")
 
 
 def test_holding_changes_only_the_status_and_can_be_decided_later(

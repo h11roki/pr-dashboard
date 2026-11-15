@@ -29,6 +29,25 @@ def test_keeps_the_session_that_made_the_pr(report: dict[str, object]) -> None:
     assert parse_report(report).session == Session(id=SESSION_ID, workdir="/work/web")
 
 
+@pytest.mark.parametrize(
+    "session",
+    [
+        SESSION_ID,
+        {"workdir": "/work/web"},
+        {"id": "--dangerously-skip-permissions", "workdir": "/work/web"},
+        {"id": SESSION_ID.upper(), "workdir": "/work/web"},
+        {"id": SESSION_ID, "workdir": "work/web"},
+        {"id": SESSION_ID, "workdir": "/work/\0web"},
+    ],
+)
+def test_keeps_the_report_but_not_a_session_that_cannot_be_resumed(
+    report: dict[str, object], session: object
+) -> None:
+    report["session"] = session
+
+    assert parse_report(report).session is None
+
+
 def test_rejects_a_body_that_is_not_an_object() -> None:
     with pytest.raises(InvalidReport, match="オブジェクト"):
         parse_report([])
@@ -71,11 +90,6 @@ def test_rejects_a_missing_field(report: dict[str, object]) -> None:
         ("changes", {"files": 1, "additions": -1, "deletions": 0}, "additions"),
         ("changes", {"files": 1, "additions": 2**53 + 1, "deletions": 0}, "additions"),
         ("tests", {"status": "skipped", "detail": ""}, "status"),
-        ("session", SESSION_ID, "session"),
-        ("session", {"workdir": "/work/web"}, "id"),
-        ("session", {"id": "../../other", "workdir": "/work/web"}, "session.id"),
-        ("session", {"id": SESSION_ID, "workdir": "work/web"}, "session.workdir"),
-        ("session", {"id": SESSION_ID, "workdir": "/work/\0web"}, "session.workdir"),
     ],
 )
 def test_rejects_an_invalid_field(

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from server import ResumeFailed, Session, resume_in_background
+from server import ResumeFailed, Session, SessionBusy, resume_in_background
 
 SESSION_ID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 FAKE_CLAUDE = """#!/usr/bin/env python3
@@ -109,7 +109,7 @@ def test_does_not_resume_a_session_that_is_still_running(
     resume(session, "直してください")
     fake_claude.call()
 
-    with pytest.raises(ResumeFailed, match="まだ直している"):
+    with pytest.raises(SessionBusy, match="まだ直している"):
         resume(session, "もう一度")
 
     fake_claude.finish()
