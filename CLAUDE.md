@@ -20,6 +20,7 @@ Claude Code が作った PR の判断材料を受け取り、手元のブラウ�
 - 手元の PC だけで動く 1 枚の画面にし、標準ライブラリと SQLite で作る。数字は `gh` から、判断材料は Claude が書く(0001)
 - 報告は pr-review-fix の最後に 1 回だけ送り、`artifact_url` を付ける。PR は Draft で作る(0002)
 - Host、Origin、Content-Type を確かめ、ほかのサイトからの要求を断る(0003、提案)
+- 画面の見た目は shadcn/ui の色の変数と部品の形を素の CSS に写す。React とビルドは入れない(0004)
 
 ## 進め方
 
