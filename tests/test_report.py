@@ -55,7 +55,9 @@ def test_rejects_a_missing_field(report: dict[str, object]) -> None:
         ("summary", [], "summary"),
         ("summary", ["1", "2", "3", "4"], "summary"),
         ("concerns", "ひとつだけ", "concerns"),
+        ("suggested_reviewers", ["--repo=other/web"], "suggested_reviewers"),
         ("changes", {"files": 1, "additions": -1, "deletions": 0}, "additions"),
+        ("changes", {"files": 1, "additions": 2**53 + 1, "deletions": 0}, "additions"),
         ("tests", {"status": "skipped", "detail": ""}, "status"),
     ],
 )

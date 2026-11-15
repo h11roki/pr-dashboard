@@ -17,8 +17,9 @@ PORT = 8787
 MAX_BODY_BYTES = 64 * 1024
 REQUEST_TIMEOUT_SECONDS = 10
 MAX_SUMMARY_LINES = 3
-MAX_PR_NUMBER = 2**31 - 1
+MAX_INTEGER = 2**31 - 1
 REPO_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/(?!\.{1,2}$)[A-Za-z0-9._][A-Za-z0-9._-]*")
+REVIEWER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)?")
 RISKS = ("low", "medium", "high")
 TEST_STATUSES = ("passed", "failed", "not_run")
 CONTENT_SECURITY_POLICY = "; ".join(
@@ -56,7 +57,7 @@ ON CONFLICT (repo, number) DO UPDATE SET
     status = CASE status WHEN 'returned' THEN 'pending' ELSE status END,
     note = CASE status WHEN 'returned' THEN NULL ELSE note END,
     decided_at = CASE status WHEN 'returned' THEN NULL ELSE decided_at END
-RETURNING id
+WHERE excluded.received_at > prs.received_at
 """
 
 SELECT_TRIAGES = """
@@ -119,8 +120,8 @@ def _field[T](data: dict[str, object], key: str, kind: type[T]) -> T:
 
 def _count(data: dict[str, object], key: str) -> int:
     value = _field(data, key, int)
-    if value < 0:
-        raise InvalidReport(f"{key} は 0 以上で指定する")
+    if not 0 <= value <= MAX_INTEGER:
+        raise InvalidReport(f"{key} は 0〜{MAX_INTEGER} で指定する")
     return value
 
 
@@ -165,14 +166,17 @@ def parse_report(raw: object) -> Report:
     if not REPO_PATTERN.fullmatch(repo):
         raise InvalidReport("repo は owner/name の形で指定する")
     number = _field(raw, "number", int)
-    if not 1 <= number <= MAX_PR_NUMBER:
-        raise InvalidReport(f"number は 1〜{MAX_PR_NUMBER} で指定する")
+    if not 1 <= number <= MAX_INTEGER:
+        raise InvalidReport(f"number は 1〜{MAX_INTEGER} で指定する")
     url = _field(raw, "url", str)
     if url != f"https://github.com/{repo}/pull/{number}":
         raise InvalidReport(f"url は https://github.com/{repo}/pull/{number} にする")
     summary = _texts(raw, "summary")
     if not 1 <= len(summary) <= MAX_SUMMARY_LINES:
         raise InvalidReport(f"summary は 1〜{MAX_SUMMARY_LINES} 行で書く")
+    reviewers = _texts(raw, "suggested_reviewers")
+    if not all(REVIEWER_PATTERN.fullmatch(reviewer) for reviewer in reviewers):
+        raise InvalidReport("suggested_reviewers は GitHub のユーザー名か org/team で指定する")
     changes = _field(raw, "changes", dict)
     tests = _field(raw, "tests", dict)
     return Report(
@@ -195,7 +199,7 @@ def parse_report(raw: object) -> Report:
             status=_choice(tests, "status", TEST_STATUSES),
             detail=_text(tests, "detail"),
         ),
-        suggested_reviewers=_texts(raw, "suggested_reviewers"),
+        suggested_reviewers=reviewers,
         artifact_url=None if raw.get("artifact_url") is None else _https_url(raw, "artifact_url"),
     )
 
@@ -208,14 +212,14 @@ class TriageStore:
         self._connection.execute(SCHEMA)
         self._lock = threading.Lock()
 
-    def save(self, report: Report) -> int:
+    def save(self, report: Report, received_at: datetime) -> bool:
         payload = json.dumps(asdict(report), ensure_ascii=False)
-        received_at = datetime.now(UTC).isoformat()
+        received = received_at.astimezone(UTC).isoformat(timespec="milliseconds")
         with self._lock, self._connection:
-            row = self._connection.execute(
-                UPSERT_REPORT, (report.repo, report.number, payload, received_at)
-            ).fetchone()
-        return int(row["id"])
+            cursor = self._connection.execute(
+                UPSERT_REPORT, (report.repo, report.number, payload, received)
+            )
+        return cursor.rowcount == 1
 
     def list_triages(self) -> list[Triage]:
         with self._lock:
@@ -225,9 +229,7 @@ class TriageStore:
                 id=row["id"],
                 status=row["status"],
                 note=row["note"],
-                received_at=datetime.fromisoformat(row["received_at"]).isoformat(
-                    timespec="milliseconds"
-                ),
+                received_at=row["received_at"],
                 decided_at=row["decided_at"],
                 report=json.loads(row["payload"]),
             )
@@ -242,13 +244,16 @@ def import_inbox(inbox: Path, store: TriageStore) -> int:
     imported = 0
     for path in sorted(inbox.glob("*.json")):
         try:
+            written = path.stat()
+            if written.st_size > MAX_BODY_BYTES:
+                raise InvalidReport(f"{MAX_BODY_BYTES} バイトを超える")
             report = parse_report(json.loads(path.read_text(encoding="utf-8")))
         except (OSError, ValueError, RecursionError) as error:
             print(f"{path} を取り込めませんでした: {error}", file=sys.stderr)
             continue
-        store.save(report)
+        if store.save(report, datetime.fromtimestamp(written.st_mtime, UTC)):
+            imported += 1
         path.unlink()
-        imported += 1
     return imported
 
 
@@ -298,11 +303,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if not (length.isascii() and length.isdigit()):
             self._reject(HTTPStatus.LENGTH_REQUIRED, "Content-Length を付ける")
             return
-        if len(length) > len(str(MAX_BODY_BYTES)) or int(length) > MAX_BODY_BYTES:
+        digits = length.lstrip("0") or "0"
+        if len(digits) > len(str(MAX_BODY_BYTES)) or int(digits) > MAX_BODY_BYTES:
             self._reject(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, f"本文は {MAX_BODY_BYTES} バイトまで")
             return
         try:
-            body = self.rfile.read(int(length))
+            body = self.rfile.read(int(digits))
         except TimeoutError:
             self._reject(HTTPStatus.REQUEST_TIMEOUT, "本文が届かない")
             return
@@ -314,7 +320,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except (ValueError, RecursionError) as error:
             self._reject(HTTPStatus.BAD_REQUEST, str(error))
             return
-        self._send_json(HTTPStatus.OK, {"id": self.server.store.save(report)})
+        saved = self.server.store.save(report, datetime.now(UTC))
+        self._send_json(HTTPStatus.OK, {"saved": saved})
 
     def _reject(self, status: HTTPStatus, message: str) -> None:
         self._send_json(status, {"error": message})

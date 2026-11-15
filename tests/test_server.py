@@ -49,7 +49,7 @@ def post_report(
 def test_a_posted_report_appears_in_the_pending_list(port: int, report: dict[str, object]) -> None:
     status, body = post_report(port, report)
     assert status == 200
-    assert json.loads(body) == {"id": 1}
+    assert json.loads(body) == {"saved": True}
 
     status, body = send(port, "GET", "/api/prs")
 
@@ -144,6 +144,15 @@ def test_refuses_an_absurdly_long_content_length(port: int) -> None:
     status, _ = send(port, "POST", "/api/prs", b"{}", headers)
 
     assert status == 413
+
+
+def test_accepts_a_content_length_with_leading_zeros(port: int, report: dict[str, object]) -> None:
+    body = json.dumps(report).encode()
+    headers = {"Content-Type": "application/json", "Content-Length": f"000{len(body)}"}
+
+    status, _ = send(port, "POST", "/api/prs", body, headers)
+
+    assert status == 200
 
 
 def test_unknown_paths_are_not_found(port: int) -> None:
