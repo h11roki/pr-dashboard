@@ -20,7 +20,7 @@ Claude Code が作った PR の判断材料を受け取り、手元のブラウ�
 - `skills/report`、`skills/open`: `/toriage:report`(判断材料の書き方と送り方)、`/toriage:open`(起動して開く。人が呼ぶときだけ)
 - `.claude-plugin/`: `plugin.json` と `marketplace.json`(同じリポジトリを marketplace `h11roki` にする)
 - データ: `TORIAGE_HOME`、なければ `${XDG_DATA_HOME:-~/.local/share}/toriage`(どちらも相対パスなら使わない)。`prs.db`(消せばリセット)、`inbox/`(起動時に取り込む。取り込めたものと保存済みより古いものは消し、読めないものは残す)、`server.log`、`server.pid`(待ち受けを始めたサーバーが自分で書く)、`returns/<セッション ID>.log`(差し戻しで裏で再開した Claude の出力)
-- `docs/images/`: README のスクショ。架空の `acme` のリポジトリで撮る
+- `docs/images/`: README のスクショ(架空の `acme` のリポジトリで撮る)と構成図。構成図は [stack-diagram](https://github.com/caru-ini/stack-diagram) で描いた `architecture.html` を、明るい見た目と暗い見た目の PNG に撮ったもの(図は Mermaid という決まりの例外。高橋さんの依頼)。描き直すときは HTML を直して撮り直す
 
 ## 決まっていること(詳細は ADR)
 

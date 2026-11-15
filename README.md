@@ -29,33 +29,17 @@ toriage では、PR を作った Claude 自身が「何を変えたか、なぜ�
 
 ## しくみ
 
-```mermaid
-flowchart LR
-  subgraph cc[Claude Code]
-    skill["/toriage:report"]
-    hook[SessionStart のフック]
-  end
-  report[toriage-report]
-  server["ダッシュボード<br/>127.0.0.1:8787"]
-  db[(SQLite)]
-  browser[ブラウザ]
-  github[GitHub]
-  session[PR を作った Claude の会話]
-
-  hook -- 止まっていれば起動 --> server
-  skill -- 判断材料の JSON --> report
-  report -- 変更の数を gh pr view で足す --> server
-  server --> db
-  browser -- 読む、ボタンを押す --> server
-  server -->|"レビュー依頼: gh pr ready / edit"| github
-  server -->|"差し戻し: claude -p --resume"| session
-  session -- 直して送り直す --> report
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-dark.png">
+  <img src="docs/images/architecture.png" alt="構成図。手元の PC で、あなたはブラウザでダッシュボードを読み、判断を toriage のサーバー(Python、127.0.0.1:8787)に送る。サーバーは報告と判断を SQLite に保存し、レビュー依頼のときは GitHub の PR を Ready にしてレビュアーを付ける。PR を作った Claude Code は toriage-report で判断材料を送り、toriage-report は POST /api/prs でサーバーに届ける。差し戻しのときは、サーバーが PR を作った Claude Code のセッションを再開して理由を渡す">
+</picture>
 
 1. Claude Code を開くと、フックがダッシュボードのサーバーを裏で起動します
 2. PR を作ったあと、Claude が `/toriage:report` のスキルに従って判断材料の JSON を書き、`toriage-report` で送ります
 3. 送る前に、サーバーと同じ検証を通します。ダッシュボードに届かなかったときは inbox に置き、次に起動したときに取り込みます
 4. 人がブラウザで判断すると、サーバーが反映します。レビュー依頼は `gh` で GitHub に、差し戻しは PR を作った Claude の会話を裏で再開して理由を渡します
+
+図は [stack-diagram](https://github.com/caru-ini/stack-diagram) で描いた [`docs/images/architecture.html`](docs/images/architecture.html) を撮ったものです。
 
 ## 必要なもの
 
