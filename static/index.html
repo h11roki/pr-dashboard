@@ -325,6 +325,7 @@
   let selectedStatus = "pending";
   let triages = [];
   let latestRequest = 0;
+  const expanded = new Map();
 
   function setText(card, selector, text) {
     card.querySelector(selector).textContent = text;
@@ -348,16 +349,18 @@
     message.hidden = text === "";
   }
 
-  function renderCard({ report, received_at }, open) {
+  function renderCard(triage, open) {
     const card = template.content.firstElementChild.cloneNode(true);
+    const { report } = triage;
     const { changes } = report;
     card.open = open;
+    card.addEventListener("toggle", () => expanded.set(triage.id, card.open));
     setText(card, ".repo", `${report.repo} #${report.number}`);
     setText(card, ".title", report.title);
     setText(
       card,
       ".stats",
-      `+${changes.additions} −${changes.deletions} · ${changes.files} ファイル · ${report.branch} · ${receivedFormat.format(new Date(received_at))} 受信`,
+      `+${changes.additions} −${changes.deletions} · ${changes.files} ファイル · ${report.branch} · ${receivedFormat.format(new Date(triage.received_at))} 受信`,
     );
     setBadge(card, ".risk", RISKS[report.risk]);
     setBadge(card, ".tests", TESTS[report.tests.status]);
@@ -383,7 +386,9 @@
       tab.querySelector(".count").textContent = triages.filter((t) => t.status === status).length;
     }
     const shown = triages.filter((triage) => triage.status === selectedStatus);
-    cards.replaceChildren(...shown.map((triage, index) => renderCard(triage, index === 0)));
+    cards.replaceChildren(
+      ...shown.map((triage, index) => renderCard(triage, expanded.get(triage.id) ?? index === 0)),
+    );
     setMessage("empty", shown.length ? "" : "このタブに PR はありません");
   }
 
@@ -414,9 +419,9 @@
     tab.addEventListener("click", () => {
       selectedStatus = tab.dataset.status;
       render();
-      refresh();
     });
   }
+  window.addEventListener("focus", refresh);
   refresh();
 </script>
 </body>
