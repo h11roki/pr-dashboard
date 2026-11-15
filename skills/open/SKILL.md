@@ -2,7 +2,7 @@
 name: open
 description: PR トリアージのダッシュボードを起動して、ブラウザで開く
 disable-model-invocation: true
-allowed-tools: Bash(pr-dashboard-start *), Bash(open http://127.0.0.1:8787), Bash(xdg-open http://127.0.0.1:8787)
+allowed-tools: Bash(pr-dashboard-start), Bash(pr-dashboard-start *), Bash(open http://127.0.0.1:8787), Bash(xdg-open http://127.0.0.1:8787)
 ---
 
 # ダッシュボードを開く
