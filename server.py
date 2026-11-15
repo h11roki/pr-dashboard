@@ -25,11 +25,18 @@ MAX_SUMMARY_LINES = 3
 MAX_INTEGER = 2**31 - 1
 REPO_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/(?!\.{1,2}$)[A-Za-z0-9._][A-Za-z0-9._-]*")
 REVIEWER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)?")
+SESSION_ID_PATTERN = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 RISKS = ("low", "medium", "high")
 TEST_STATUSES = ("passed", "failed", "not_run")
 ACTION_PATH = re.compile(r"/api/prs/([0-9]{1,10})/(request-review|return|hold)")
 MAX_REASON_LENGTH = 2000
 GH_TIMEOUT_SECONDS = 30
+RETURN_PROMPT = """toriage で {url} が差し戻されました。
+
+理由:
+{reason}
+
+この PR を直して push し、/toriage:report で判断材料を送り直してください。"""
 CONTENT_SECURITY_POLICY = "; ".join(
     [
         "default-src 'none'",
@@ -128,6 +135,10 @@ class GhFailed(DecisionError):
     status = HTTPStatus.BAD_GATEWAY
 
 
+class ResumeFailed(DecisionError):
+    status = HTTPStatus.BAD_GATEWAY
+
+
 @dataclass(frozen=True)
 class Decision:
     status: str
@@ -154,6 +165,15 @@ class TestResult:
 
 
 @dataclass(frozen=True)
+class Session:
+    id: str
+    workdir: str
+
+
+ResumeSession = Callable[[Session, str], None]
+
+
+@dataclass(frozen=True)
 class Report:
     repo: str
     number: int
@@ -169,6 +189,7 @@ class Report:
     tests: TestResult
     suggested_reviewers: tuple[str, ...]
     artifact_url: str | None
+    session: Session | None
 
 
 @dataclass(frozen=True)
@@ -182,6 +203,7 @@ class Triage:
     decided_at: str | None
     report: object
     reviewers: tuple[str, ...]
+    session: Session | None
     actions: tuple[Action, ...]
 
 
@@ -227,6 +249,16 @@ def _https_url(data: dict[str, object], key: str) -> str:
     if not value.startswith("https://"):
         raise InvalidReport(f"{key} は https:// で始まる URL で指定する")
     return value
+
+
+def _session(data: dict[str, object]) -> Session:
+    session_id = _field(data, "id", str)
+    if not SESSION_ID_PATTERN.fullmatch(session_id):
+        raise InvalidReport("session.id は Claude Code のセッション ID で指定する")
+    workdir = _field(data, "workdir", str)
+    if not Path(workdir).is_absolute() or "\0" in workdir:
+        raise InvalidReport("session.workdir は絶対パスで指定する")
+    return Session(id=session_id, workdir=workdir)
 
 
 def parse_report(raw: object) -> Report:
@@ -275,6 +307,7 @@ def parse_report(raw: object) -> Report:
         ),
         suggested_reviewers=reviewers,
         artifact_url=None if raw.get("artifact_url") is None else _https_url(raw, "artifact_url"),
+        session=None if raw.get("session") is None else _session(_field(raw, "session", dict)),
     )
 
 
@@ -320,6 +353,8 @@ class TriageStore:
     def _triage(row: sqlite3.Row) -> Triage:
         report = json.loads(row["payload"])
         stored = report.get("suggested_reviewers") if isinstance(report, dict) else None
+        stored_session = report.get("session") if isinstance(report, dict) else None
+        session = _session(stored_session) if isinstance(stored_session, dict) else None
         return Triage(
             id=row["id"],
             repo=row["repo"],
@@ -334,7 +369,12 @@ class TriageStore:
                 for name in (stored if isinstance(stored, list) else [])
                 if isinstance(name, str) and REVIEWER_PATTERN.fullmatch(name)
             ),
-            actions=ALLOWED_ACTIONS.get(row["status"], ()),
+            session=session,
+            actions=tuple(
+                action
+                for action in ALLOWED_ACTIONS.get(row["status"], ())
+                if action is not Action.RETURN or session is not None
+            ),
         )
 
     def close(self) -> None:
@@ -374,6 +414,40 @@ def run_gh(arguments: list[str], stdin: str) -> None:
         raise GhFailed(completed.stderr.strip() or f"gh が {completed.returncode} で終わった")
 
 
+def resume_in_background(logs: Path) -> ResumeSession:
+    def resume(session: Session, prompt: str) -> None:
+        if not Path(session.workdir).is_dir():
+            raise ResumeFailed(f"PR を作った場所 {session.workdir} がもうない")
+        logs.mkdir(parents=True, exist_ok=True)
+        try:
+            with (logs / f"{session.id}.log").open("a", encoding="utf-8") as log:
+                log.write(f"{datetime.now(UTC).isoformat(timespec='seconds')} に差し戻した\n")
+                log.flush()
+                process = subprocess.Popen(
+                    [
+                        "claude",
+                        "-p",
+                        "--resume",
+                        session.id,
+                        "--permission-mode",
+                        "auto",
+                        "--permission-prompts",
+                        "none",
+                        prompt,
+                    ],
+                    cwd=session.workdir,
+                    stdin=subprocess.DEVNULL,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+        except OSError as error:
+            raise ResumeFailed(f"Claude Code を起動できなかった: {error}") from error
+        threading.Thread(target=process.wait, daemon=True).start()
+
+    return resume
+
+
 def parse_decision_request(body: bytes) -> DecisionRequest:
     raw = load_json(body, InvalidReason)
     if not isinstance(raw, dict):
@@ -386,7 +460,12 @@ def parse_decision_request(body: bytes) -> DecisionRequest:
 
 
 def decide(
-    store: TriageStore, gh: RunGh, triage_id: int, action: Action, request: DecisionRequest
+    store: TriageStore,
+    gh: RunGh,
+    resume: ResumeSession,
+    triage_id: int,
+    action: Action,
+    request: DecisionRequest,
 ) -> Decision:
     triage = store.find(triage_id)
     if triage is None:
@@ -412,7 +491,12 @@ def decide(
         case Action.RETURN:
             if not request.reason.strip() or len(request.reason) > MAX_REASON_LENGTH:
                 raise InvalidReason(f"差し戻す理由は 1〜{MAX_REASON_LENGTH} 字で書く")
-            gh(["pr", "comment", *target, "--body-file", "-"], request.reason)
+            if triage.session is None:
+                raise AlreadyDecided(
+                    "この報告には PR を作ったセッションが付いていないので差し戻せない"
+                )
+            pr_url = f"https://github.com/{triage.repo}/pull/{triage.number}"
+            resume(triage.session, RETURN_PROMPT.format(url=pr_url, reason=request.reason))
             status, note = "returned", request.reason
         case Action.HOLD:
             status, note = "on_hold", None
@@ -420,7 +504,7 @@ def decide(
             assert_never(action)
     recorded, report_changed = store.decide(triage, status, note, datetime.now(UTC))
     if not recorded:
-        raise AlreadyDecided("GitHub には反映したが、そのあいだに状態が変わったので記録していない")
+        raise AlreadyDecided("反映はしたが、そのあいだに状態が変わったので記録していない")
     if report_changed:
         warnings.append(
             "判断のあいだに新しい報告が届いた。判断はそのまま記録したので、新しい報告を確かめる"
@@ -447,11 +531,14 @@ def import_inbox(inbox: Path, store: TriageStore) -> int:
 
 
 class DashboardServer(ThreadingHTTPServer):
-    def __init__(self, port: int, store: TriageStore, page: Path, gh: RunGh) -> None:
+    def __init__(
+        self, port: int, store: TriageStore, page: Path, gh: RunGh, resume: ResumeSession
+    ) -> None:
         super().__init__((HOST, port), DashboardHandler)
         self.store = store
         self.page = page.read_bytes()
         self.gh = gh
+        self.resume = resume
         self.decision_lock = threading.Lock()
         self.allowed_hosts = frozenset(
             {f"{HOST}:{self.server_port}", f"localhost:{self.server_port}"}
@@ -534,7 +621,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
         try:
             request = parse_decision_request(body)
             with self.server.decision_lock:
-                decision = decide(self.server.store, self.server.gh, triage_id, action, request)
+                decision = decide(
+                    self.server.store,
+                    self.server.gh,
+                    self.server.resume,
+                    triage_id,
+                    action,
+                    request,
+                )
         except DecisionError as error:
             self._reject(error.status, str(error))
             return
@@ -573,7 +667,9 @@ def data_home() -> Path:
 def main() -> None:
     home = data_home()
     store = TriageStore(home / "prs.db")
-    server = DashboardServer(PORT, store, ROOT / "static" / "index.html", run_gh)
+    server = DashboardServer(
+        PORT, store, ROOT / "static" / "index.html", run_gh, resume_in_background(home / "returns")
+    )
     pid_file = home / "server.pid"
     pid_file.write_text(f"{os.getpid()}\n", encoding="utf-8")
     imported = import_inbox(home / "inbox", store)

@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from collections.abc import Callable
 from contextlib import closing
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -13,6 +14,8 @@ from server import (
     MAX_REASON_LENGTH,
     Action,
     DecisionRequest,
+    ResumeSession,
+    Session,
     Triage,
     TriageStore,
     decide,
@@ -20,6 +23,12 @@ from server import (
 )
 
 GhCalls = list[tuple[list[str], str]]
+Resumed = list[tuple[Session, str]]
+SESSION = Session(id="07805e44-cede-43f0-b5dd-4a9ae6541ad5", workdir="/work/web")
+
+
+def from_a_session(report: dict[str, object]) -> dict[str, object]:
+    return report | {"session": {"id": SESSION.id, "workdir": SESSION.workdir}}
 
 
 def save_pending(store: TriageStore, report: dict[str, object]) -> Triage:
@@ -111,17 +120,20 @@ def test_a_stored_reviewer_that_no_longer_passes_is_left_out(
     assert gh_calls[1][0][-1] == "bob"
 
 
-def test_returning_a_pr_comments_the_reason(
-    port: int, store: TriageStore, report: dict[str, object], gh_calls: GhCalls
+def test_returning_a_pr_hands_the_reason_to_the_session_that_made_it(
+    port: int, store: TriageStore, report: dict[str, object], gh_calls: GhCalls, resumed: Resumed
 ) -> None:
-    triage = save_pending(store, report)
+    triage = save_pending(store, from_a_session(report))
 
     status, _ = post_decision(port, triage, "return", "テストが足りない")
 
     assert status == 200
-    assert gh_calls == [
-        (["pr", "comment", "128", "-R", "acme/web", "--body-file", "-"], "テストが足りない")
-    ]
+    assert gh_calls == []
+    [(session, prompt)] = resumed
+    assert session == SESSION
+    assert "https://github.com/acme/web/pull/128" in prompt
+    assert "テストが足りない" in prompt
+    assert "/toriage:report" in prompt
     returned = store.find(triage.id)
     assert returned is not None
     assert (returned.status, returned.note) == ("returned", "テストが足りない")
@@ -129,14 +141,40 @@ def test_returning_a_pr_comments_the_reason(
 
 @pytest.mark.parametrize("reason", ["", "   ", "あ" * (MAX_REASON_LENGTH + 1)])
 def test_returning_needs_a_reason(
-    port: int, store: TriageStore, report: dict[str, object], gh_calls: GhCalls, reason: str
+    port: int, store: TriageStore, report: dict[str, object], resumed: Resumed, reason: str
 ) -> None:
-    triage = save_pending(store, report)
+    triage = save_pending(store, from_a_session(report))
 
     status, _ = post_decision(port, triage, "return", reason)
 
     assert status == 400
-    assert gh_calls == []
+    assert resumed == []
+    assert status_of(store, triage) == "pending"
+
+
+def test_a_report_without_its_session_cannot_be_returned(
+    port: int, store: TriageStore, report: dict[str, object], resumed: Resumed
+) -> None:
+    triage = save_pending(store, report)
+
+    status, _ = post_decision(port, triage, "return", "テストが足りない")
+
+    assert Action.RETURN not in triage.actions
+    assert status == 409
+    assert resumed == []
+    assert status_of(store, triage) == "pending"
+
+
+def test_a_session_that_cannot_be_resumed_leaves_the_status_alone(
+    port: int, store: TriageStore, report: dict[str, object], resume_failures: list[str]
+) -> None:
+    triage = save_pending(store, from_a_session(report))
+    resume_failures.append("PR を作った場所 /work/web がもうない")
+
+    status, body = post_decision(port, triage, "return", "テストが足りない")
+
+    assert status == 502
+    assert "/work/web" in body["error"]
     assert status_of(store, triage) == "pending"
 
 
@@ -166,7 +204,7 @@ def test_a_held_pr_cannot_be_held_again(
 def test_lists_the_decisions_each_pr_can_take(
     port: int, store: TriageStore, report: dict[str, object]
 ) -> None:
-    triage = save_pending(store, report)
+    triage = save_pending(store, from_a_session(report))
     post_decision(port, triage, "hold")
 
     [held] = store.list_triages()
@@ -248,17 +286,21 @@ def test_a_decision_from_another_site_is_refused(
     assert gh_calls == []
 
 
-def test_a_report_that_arrives_during_gh_is_recorded_with_a_warning(
-    store: TriageStore, report: dict[str, object]
+def test_a_report_that_arrives_while_returning_is_recorded_with_a_warning(
+    store: TriageStore,
+    report: dict[str, object],
+    recording_gh: Callable[[list[str], str], None],
 ) -> None:
-    triage = save_pending(store, report)
+    triage = save_pending(store, from_a_session(report))
 
-    def gh_while_a_new_report_arrives(arguments: list[str], stdin: str) -> None:
-        store.save(parse_report(report | {"title": "直した題"}), datetime.now(UTC))
+    def resume_while_a_new_report_arrives(session: Session, prompt: str) -> None:
+        store.save(parse_report(from_a_session(report) | {"title": "直した題"}), datetime.now(UTC))
 
+    resume: ResumeSession = resume_while_a_new_report_arrives
     decision = decide(
         store,
-        gh_while_a_new_report_arrives,
+        recording_gh,
+        resume,
         triage.id,
         Action.RETURN,
         DecisionRequest(seen=triage.received_at, reason="直して"),

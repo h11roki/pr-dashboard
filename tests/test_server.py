@@ -6,7 +6,15 @@ from http.client import HTTPConnection
 
 import pytest
 
-from server import HOST, MAX_BODY_BYTES, ROOT, DashboardHandler, DashboardServer, TriageStore
+from server import (
+    HOST,
+    MAX_BODY_BYTES,
+    ROOT,
+    DashboardHandler,
+    DashboardServer,
+    ResumeSession,
+    TriageStore,
+)
 
 CLIENT_TIMEOUT_SECONDS = 5
 
@@ -145,9 +153,13 @@ def test_accepts_a_content_length_with_leading_zeros(port: int, report: dict[str
 
 
 def test_stops_serving_when_asked_to_shut_down(
-    store: TriageStore, recording_gh: Callable[[list[str], str], None]
+    store: TriageStore,
+    recording_gh: Callable[[list[str], str], None],
+    recording_resume: ResumeSession,
 ) -> None:
-    server = DashboardServer(0, store, ROOT / "static" / "index.html", recording_gh)
+    server = DashboardServer(
+        0, store, ROOT / "static" / "index.html", recording_gh, recording_resume
+    )
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
 

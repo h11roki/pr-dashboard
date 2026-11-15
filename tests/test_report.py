@@ -4,7 +4,9 @@ import sys
 
 import pytest
 
-from server import MAX_BODY_BYTES, ROOT, InvalidReport, parse_body, parse_report
+from server import MAX_BODY_BYTES, ROOT, InvalidReport, Session, parse_body, parse_report
+
+SESSION_ID = "07805e44-cede-43f0-b5dd-4a9ae6541ad5"
 
 
 def test_accepts_the_example_from_the_design(report: dict[str, object]) -> None:
@@ -19,6 +21,12 @@ def test_artifact_url_may_be_left_out(report: dict[str, object]) -> None:
     del report["artifact_url"]
 
     assert parse_report(report).artifact_url is None
+
+
+def test_keeps_the_session_that_made_the_pr(report: dict[str, object]) -> None:
+    report["session"] = {"id": SESSION_ID, "workdir": "/work/web"}
+
+    assert parse_report(report).session == Session(id=SESSION_ID, workdir="/work/web")
 
 
 def test_rejects_a_body_that_is_not_an_object() -> None:
@@ -63,6 +71,11 @@ def test_rejects_a_missing_field(report: dict[str, object]) -> None:
         ("changes", {"files": 1, "additions": -1, "deletions": 0}, "additions"),
         ("changes", {"files": 1, "additions": 2**53 + 1, "deletions": 0}, "additions"),
         ("tests", {"status": "skipped", "detail": ""}, "status"),
+        ("session", SESSION_ID, "session"),
+        ("session", {"workdir": "/work/web"}, "id"),
+        ("session", {"id": "../../other", "workdir": "/work/web"}, "session.id"),
+        ("session", {"id": SESSION_ID, "workdir": "work/web"}, "session.workdir"),
+        ("session", {"id": SESSION_ID, "workdir": "/work/\0web"}, "session.workdir"),
     ],
 )
 def test_rejects_an_invalid_field(
