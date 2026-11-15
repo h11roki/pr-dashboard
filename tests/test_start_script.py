@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -7,9 +8,11 @@ from server import ROOT
 START = ROOT / "bin" / "toriage-start"
 
 
-def start(home: Path, *args: str, path: str | None = None) -> subprocess.CompletedProcess[str]:
+def start(
+    home: Path, *args: str, path: str | None = None, script: Path = START
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [str(START), *args],
+        [str(script), *args],
         capture_output=True,
         text=True,
         env=os.environ | {"TORIAGE_HOME": str(home), "PATH": path or os.environ["PATH"]},
@@ -43,21 +46,37 @@ def test_restart_replaces_the_running_dashboard(dashboard_home: Path) -> None:
     assert server_pid(dashboard_home) != before
 
 
-def test_restart_leaves_a_process_that_is_not_the_dashboard_alone(dashboard_home: Path) -> None:
+def test_restart_stops_the_dashboard_that_answers_not_the_pid_in_the_file(
+    dashboard_home: Path,
+) -> None:
     start(dashboard_home)
-    dashboard = server_pid(dashboard_home)
-    pid_file = dashboard_home / "server.pid"
+    before = server_pid(dashboard_home)
     with subprocess.Popen(["sleep", "30"]) as stranger:
-        pid_file.write_text(f"{stranger.pid}\n", encoding="utf-8")
+        (dashboard_home / "server.pid").write_text(f"{stranger.pid}\n", encoding="utf-8")
         try:
             result = start(dashboard_home, "--restart")
 
-            assert result.returncode == 1
-            assert "止められなかった" in result.stderr
+            assert result.returncode == 0, result.stderr
+            assert server_pid(dashboard_home) not in (before, stranger.pid)
             assert stranger.poll() is None
         finally:
             stranger.kill()
-            pid_file.write_text(f"{dashboard}\n", encoding="utf-8")
+
+
+def test_restart_replaces_a_dashboard_started_from_another_copy(
+    dashboard_home: Path, tmp_path: Path
+) -> None:
+    other = tmp_path / "other-version"
+    for directory in ("bin", "libexec", "static"):
+        shutil.copytree(ROOT / directory, other / directory)
+    shutil.copy2(ROOT / "server.py", other / "server.py")
+    start(dashboard_home, script=other / "bin" / "toriage-start")
+    before = server_pid(dashboard_home)
+
+    result = start(dashboard_home, "--restart")
+
+    assert result.returncode == 0, result.stderr
+    assert server_pid(dashboard_home) != before
 
 
 def test_says_where_to_look_when_the_dashboard_cannot_start(

@@ -15,9 +15,8 @@ running() {
 }
 
 if [ "${1:-}" = "--restart" ]; then
-  pid="$(cat "$home/server.pid" 2>/dev/null)" || pid=""
-  command_line="$(ps -p "$pid" -o command= 2>/dev/null)" || command_line=""
-  if [[ "$command_line" == *"$(dirname "$root")"/*/server.py* ]]; then
+  pid="$(curl -sf --noproxy '*' --max-time 1 "$url/api/server" | jq -r '.pid | numbers' 2>/dev/null)" || pid=""
+  if [ -n "$pid" ]; then
     kill "$pid" 2>/dev/null || true
   fi
   deadline=$((SECONDS + 5))

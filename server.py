@@ -472,6 +472,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif url.path == "/api/prs":
             triages = self.server.store.list_triages()
             self._send_json(HTTPStatus.OK, [asdict(triage) for triage in triages])
+        elif url.path == "/api/server":
+            self._send_json(HTTPStatus.OK, {"pid": os.getpid()})
         else:
             self._reject(HTTPStatus.NOT_FOUND, "見つからない")
 

@@ -1,4 +1,5 @@
 import json
+import os
 import socket
 from http.client import HTTPConnection
 
@@ -140,6 +141,13 @@ def test_accepts_a_content_length_with_leading_zeros(port: int, report: dict[str
     status, _ = send(port, "POST", "/api/prs", body, headers)
 
     assert status == 200
+
+
+def test_tells_which_process_is_serving(port: int) -> None:
+    status, body = send(port, "GET", "/api/server")
+
+    assert status == 200
+    assert json.loads(body) == {"pid": os.getpid()}
 
 
 def test_unknown_paths_are_not_found(port: int) -> None:
