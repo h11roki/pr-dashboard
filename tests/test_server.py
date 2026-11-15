@@ -110,3 +110,16 @@ def test_unknown_paths_are_not_found(port: int) -> None:
     status, _ = send(port, "GET", "/admin")
 
     assert status == 404
+
+
+def test_serves_the_page_and_keeps_other_sites_from_framing_it(port: int) -> None:
+    connection = HTTPConnection(HOST, port)
+    connection.request("GET", "/")
+    response = connection.getresponse()
+    body = response.read()
+    connection.close()
+
+    assert response.status == 200
+    assert response.getheader("Content-Type") == "text/html; charset=utf-8"
+    assert "frame-ancestors 'none'" in response.getheader("Content-Security-Policy", "")
+    assert "<title>PRトリアージ</title>" in body.decode()
