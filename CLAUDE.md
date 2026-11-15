@@ -12,7 +12,7 @@ Claude Code が作った PR の判断材料を受け取り、手元のブラウ�
 
 - `server.py`: 報告の受け取り、検証、SQLite への保存、一覧の API、画面の配信。実行時は Python の標準ライブラリだけを使う
 - `static/index.html`: 画面。HTML と素の JavaScript の 1 ファイル。サーバーは起動時に 1 回だけ読むので、書き換えたら起動し直す
-- `scripts/report-pr.sh`: pr-review-fix の手順 7 で Claude Code が呼ぶ送信スクリプト。Claude の判断材料(標準入力の JSON)に `gh pr view` の数字を足し、`server.py` と同じ検証をしてから送る。つながらないときだけ `inbox/` に保存する。終わり方は 0 が送ったか inbox に保存した、1 が理由を出して失敗、2 が使い方の誤り。`jq`、`curl`、`python3` が要る。送り先と inbox は `PR_DASHBOARD_URL`、`PR_DASHBOARD_INBOX` で変えられる
+- `scripts/report-pr.sh`: pr-review-fix の手順 7 で Claude Code が呼ぶ送信スクリプト。Claude の判断材料(標準入力の JSON)に `gh pr view` の数字を足し、`python3 -I server.py --check`(サーバーと同じ `parse_body` の検証)を通してから送る。つながらないときだけ `inbox/` に保存する。終わり方は 0 が送ったか inbox に保存した、1 が理由を出して失敗、2 が使い方の誤り。`jq`、`curl`、`python3` が要る。送り先と inbox は `PR_DASHBOARD_URL`、`PR_DASHBOARD_INBOX` で変えられる
 - `data/prs.db`: 起動時に作られる。消せばリセットできる
 - `inbox/`: 送れなかった報告の退避先。起動時に取り込む。取り込めたものと、保存済みより古いものは消し、読めないものは残す
 

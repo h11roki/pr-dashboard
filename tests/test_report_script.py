@@ -1,6 +1,5 @@
 import json
 import os
-import socket
 import subprocess
 from pathlib import Path
 
@@ -9,6 +8,7 @@ import pytest
 from server import HOST, ROOT, TriageStore
 
 SCRIPT = ROOT / "scripts" / "report-pr.sh"
+REFUSED = f"http://{HOST}:1"
 FACTS_FROM_GH = ("repo", "number", "url", "title", "branch", "changes")
 GH_PR_VIEW = {
     "number": 128,
@@ -33,14 +33,6 @@ def write_gh(tmp_path: Path, body: str) -> Path:
 @pytest.fixture
 def fake_gh(tmp_path: Path) -> Path:
     return write_gh(tmp_path, f"echo '{json.dumps(GH_PR_VIEW, ensure_ascii=False)}'")
-
-
-@pytest.fixture
-def refused_port() -> int:
-    with socket.socket() as probe:
-        probe.bind((HOST, 0))
-        port: int = probe.getsockname()[1]
-    return port
 
 
 def judgment_of(report: dict[str, object]) -> dict[str, object]:
@@ -80,12 +72,12 @@ def test_sends_the_judgment_with_the_facts_from_gh(
 
 
 def test_keeps_the_report_in_the_inbox_when_the_dashboard_is_down(
-    tmp_path: Path, refused_port: int, report: dict[str, object], fake_gh: Path
+    tmp_path: Path, report: dict[str, object], fake_gh: Path
 ) -> None:
     inbox = tmp_path / "inbox"
     judgment = json.dumps(judgment_of(report))
 
-    result = run_script(fake_gh, judgment, f"http://{HOST}:{refused_port}", inbox, "128")
+    result = run_script(fake_gh, judgment, REFUSED, inbox, "128")
 
     assert result.returncode == 0, result.stderr
     saved = json.loads((inbox / "acme_web-128.json").read_text(encoding="utf-8"))
@@ -93,12 +85,12 @@ def test_keeps_the_report_in_the_inbox_when_the_dashboard_is_down(
 
 
 def test_does_not_keep_an_invalid_report_even_when_the_dashboard_is_down(
-    tmp_path: Path, refused_port: int, report: dict[str, object], fake_gh: Path
+    tmp_path: Path, report: dict[str, object], fake_gh: Path
 ) -> None:
     inbox = tmp_path / "inbox"
     judgment = json.dumps(judgment_of(report) | {"risk": "critical"})
 
-    result = run_script(fake_gh, judgment, f"http://{HOST}:{refused_port}", inbox, "128")
+    result = run_script(fake_gh, judgment, REFUSED, inbox, "128")
 
     assert result.returncode == 1
     assert "risk" in result.stderr
@@ -118,20 +110,32 @@ def test_fails_with_the_reason_when_the_dashboard_refuses(
     assert "404" in result.stderr
 
 
-def test_fails_when_the_judgment_is_not_json(tmp_path: Path, port: int, fake_gh: Path) -> None:
-    result = run_script(fake_gh, "summary: なし", f"http://{HOST}:{port}", tmp_path / "inbox", "1")
+def test_accepts_a_dashboard_url_with_a_trailing_slash(
+    tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
+) -> None:
+    judgment = json.dumps(judgment_of(report))
+
+    result = run_script(fake_gh, judgment, f"http://{HOST}:{port}/", tmp_path / "inbox", "128")
+
+    assert result.returncode == 0, result.stderr
+    assert len(store.list_triages()) == 1
+
+
+@pytest.mark.parametrize("judgment", ["summary: なし", '{"risk": "low"}\n{"risk": "high"}'])
+def test_fails_when_the_judgment_is_not_one_json_object(
+    tmp_path: Path, fake_gh: Path, judgment: str
+) -> None:
+    result = run_script(fake_gh, judgment, "http://unused", tmp_path / "inbox", "1")
 
     assert result.returncode == 1
     assert "JSON" in result.stderr
 
 
-def test_fails_when_gh_cannot_read_the_pr(
-    tmp_path: Path, port: int, report: dict[str, object]
-) -> None:
+def test_fails_when_gh_cannot_read_the_pr(tmp_path: Path, report: dict[str, object]) -> None:
     failing_gh = write_gh(tmp_path, "exit 1")
     judgment = json.dumps(judgment_of(report))
 
-    result = run_script(failing_gh, judgment, f"http://{HOST}:{port}", tmp_path / "inbox", "9")
+    result = run_script(failing_gh, judgment, "http://unused", tmp_path / "inbox", "9")
 
     assert result.returncode == 1
     assert "PR 9" in result.stderr

@@ -11,13 +11,15 @@ fail() {
   exit 1
 }
 
-root="$(CDPATH='' cd -- "$(dirname -- "$(readlink -f -- "$0")")/.." && pwd -P)"
+script="$(readlink -f -- "$0")" || fail "スクリプトの置き場所が分からない"
+root="$(CDPATH='' cd -- "$(dirname -- "$script")/.." && pwd -P)"
 dashboard="${PR_DASHBOARD_URL:-http://127.0.0.1:8787}"
+dashboard="${dashboard%/}"
 inbox="${PR_DASHBOARD_INBOX:-$root/inbox}"
 
 judgment="$(cat)"
-jq -e 'type == "object"' >/dev/null 2>&1 <<<"$judgment" ||
-  fail "判断材料が JSON のオブジェクトとして読めない"
+jq -e -s 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1 <<<"$judgment" ||
+  fail "判断材料が JSON のオブジェクト 1 つとして読めない"
 facts="$(gh pr view "$1" --json number,url,title,headRefName,additions,deletions,changedFiles)" ||
   fail "gh で PR $1 を読めなかった"
 
@@ -37,19 +39,8 @@ body="$(jq -n --argjson judgment "$judgment" --argjson facts "$facts" '
 label="$(jq -r '"\(.repo)#\(.number)"' <<<"$body")"
 name="$(jq -r '"\(.repo | sub("/"; "_"))-\(.number)"' <<<"$body")"
 
-problem="$(python3 -c '
-import json
-import sys
-
-sys.path.insert(0, sys.argv[1])
-from server import InvalidReport, parse_report
-
-try:
-    parse_report(json.load(sys.stdin))
-except InvalidReport as error:
-    print(error)
-' "$root" <<<"$body")"
-[ -z "$problem" ] || fail "報告が検証に通らない: $problem"
+problem="$(python3 -I "$root/server.py" --check 2>&1 <<<"$body")" ||
+  fail "報告が検証に通らない: $problem"
 
 response="$(mktemp)"
 trap 'rm -f "$response"' EXIT
@@ -67,8 +58,15 @@ fi
 [ "$curl_exit" -eq 0 ] || fail "ダッシュボードに届いたか分からない(curl $curl_exit)。送り直してよい"
 [ "$status" = "200" ] || fail "ダッシュボードに断られた($status): $(cat "$response")"
 
-if jq -e '.saved' "$response" >/dev/null; then
-  echo "ダッシュボードに送った: $label"
-else
-  echo "ダッシュボードには $label のもっと新しい報告があるので、置き換えなかった" >&2
-fi
+saved="$(jq -r '.saved' "$response" 2>/dev/null)" || saved=""
+case "$saved" in
+  true)
+    echo "ダッシュボードに送った: $label"
+    ;;
+  false)
+    echo "ダッシュボードには $label のもっと新しい報告があるので、置き換えなかった" >&2
+    ;;
+  *)
+    fail "ダッシュボードの応答が読めない: $(cat "$response")"
+    ;;
+esac
