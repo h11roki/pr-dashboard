@@ -11,6 +11,12 @@ fail() {
   exit 1
 }
 
+for tool in gh jq curl python3; do
+  command -v "$tool" >/dev/null || fail "$tool が見つからない"
+done
+python3 -c 'import sys; sys.exit(sys.version_info < (3, 13))' ||
+  fail "python3 は 3.13 以上が要る(今は $(python3 --version 2>&1))"
+
 script="$(readlink -f -- "$0")" || fail "スクリプトの置き場所が分からない"
 root="$(CDPATH='' cd -- "$(dirname -- "$script")/.." && pwd -P)"
 dashboard="${PR_DASHBOARD_URL:-http://127.0.0.1:8787}"
@@ -23,8 +29,8 @@ jq -e -s 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1 <<<"$judgme
 facts="$(gh pr view "$1" --json number,url,title,headRefName,additions,deletions,changedFiles)" ||
   fail "gh で PR $1 を読めなかった"
 
-body="$(jq -n --argjson judgment "$judgment" --argjson facts "$facts" '
-  $judgment + {
+body="$(jq -c --argjson facts "$facts" '
+  . + {
     repo: ($facts.url | split("/") | "\(.[3])/\(.[4])"),
     number: $facts.number,
     url: $facts.url,
@@ -35,9 +41,8 @@ body="$(jq -n --argjson judgment "$judgment" --argjson facts "$facts" '
       additions: $facts.additions,
       deletions: $facts.deletions
     }
-  }')"
-label="$(jq -r '"\(.repo)#\(.number)"' <<<"$body")"
-name="$(jq -r '"\(.repo | sub("/"; "_"))-\(.number)"' <<<"$body")"
+  }' <<<"$judgment")"
+read -r label name < <(jq -r '"\(.repo)#\(.number) \(.repo | sub("/"; "_"))-\(.number)"' <<<"$body")
 
 problem="$(python3 -I "$root/server.py" --check 2>&1 <<<"$body")" ||
   fail "報告が検証に通らない: $problem"
@@ -49,13 +54,18 @@ status="$(curl -sS --noproxy '*' --max-time 10 -o "$response" -w '%{http_code}' 
   -X POST "$dashboard/api/prs" -H 'Content-Type: application/json' \
   --data-binary @- <<<"$body")" || curl_exit=$?
 
-if [ "$curl_exit" -eq 7 ]; then
-  mkdir -p "$inbox"
-  printf '%s\n' "$body" >"$inbox/$name.json"
-  echo "ダッシュボードにつながらないので $inbox/$name.json に保存した。次に起動したときに取り込まれる" >&2
-  exit 0
-fi
-[ "$curl_exit" -eq 0 ] || fail "ダッシュボードに届いたか分からない(curl $curl_exit)。送り直してよい"
+case "$curl_exit" in
+  0) ;;
+  6 | 7)
+    mkdir -p "$inbox"
+    printf '%s\n' "$body" >"$inbox/$name.json"
+    echo "ダッシュボードにつながらないので $inbox/$name.json に保存した。次に起動したときに取り込まれる" >&2
+    exit 0
+    ;;
+  *)
+    fail "ダッシュボードに届いたか分からない(curl $curl_exit)。送り直してよい"
+    ;;
+esac
 [ "$status" = "200" ] || fail "ダッシュボードに断られた($status): $(cat "$response")"
 
 saved="$(jq -r '.saved' "$response" 2>/dev/null)" || saved=""

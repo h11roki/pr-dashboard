@@ -254,9 +254,12 @@ def import_inbox(inbox: Path, store: TriageStore) -> int:
     imported = 0
     for path in sorted(inbox.glob("*.json")):
         try:
-            written_at = datetime.fromtimestamp(path.stat().st_mtime, UTC)
+            written = path.stat()
+            if written.st_size > MAX_BODY_BYTES:
+                raise InvalidReport(f"本文は {MAX_BODY_BYTES} バイトまで")
+            written_at = datetime.fromtimestamp(written.st_mtime, UTC)
             report = parse_body(path.read_bytes())
-        except (OSError, InvalidReport) as error:
+        except (OSError, ValueError, OverflowError) as error:
             print(f"{path} を取り込めませんでした: {error}", file=sys.stderr)
             continue
         if store.save(report, written_at):
@@ -369,7 +372,10 @@ def check_stdin() -> None:
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["--check"]:
-        check_stdin()
-    else:
-        main()
+    match sys.argv[1:]:
+        case []:
+            main()
+        case ["--check"]:
+            check_stdin()
+        case _:
+            sys.exit("使い方: python3 server.py [--check]")

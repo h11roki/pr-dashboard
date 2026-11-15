@@ -109,3 +109,16 @@ def test_the_check_command_explains_an_invalid_report(report: dict[str, object])
 
     assert result.returncode == 1
     assert "risk" in result.stderr
+
+
+def test_an_unknown_argument_does_not_start_the_server() -> None:
+    result = subprocess.run(
+        [sys.executable, "-I", str(ROOT / "server.py"), "--chek"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 1
+    assert "使い方" in result.stderr
