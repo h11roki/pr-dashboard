@@ -124,7 +124,25 @@
     color: var(--foreground);
     box-shadow: var(--shadow-sm);
   }
-  .tabs-trigger .count {
+  .sidebar-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+  .archive {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 28px;
+    padding: 0 8px;
+    border: 1px solid transparent;
+    border-radius: calc(var(--radius) - 2px);
+    background: none;
+    color: var(--muted-foreground);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .archive:hover, .archive[aria-pressed="true"] { background: var(--sidebar-accent); color: var(--foreground); }
+  .tabs-trigger .count,
+  .archive .count {
     min-width: 20px;
     padding: 0 6px;
     border-radius: 999px;
@@ -333,6 +351,7 @@
   [data-tone="good"] { --tone: var(--good); }
   [data-tone="warn"] { --tone: var(--warn); }
   [data-tone="bad"] { --tone: var(--bad); }
+  [data-tone="muted"] { --tone: var(--muted-foreground); }
 
   .alert {
     display: grid;
@@ -388,6 +407,7 @@
   }
   .switch:focus-visible,
   .tabs-trigger:focus-visible,
+  .archive:focus-visible,
   .button:focus-visible,
   .reason:focus-visible,
   .thread:focus-visible,
@@ -439,9 +459,12 @@
         <button type="button" class="tabs-trigger" data-status="requested" aria-pressed="false">依頼済み<span class="count"></span></button>
         <button type="button" class="tabs-trigger" data-status="returned" aria-pressed="false">差し戻し<span class="count"></span></button>
       </nav>
-      <div class="switch-field">
-        <button type="button" role="switch" id="group-by-project" class="switch" aria-checked="true"><span class="switch-thumb"></span></button>
-        <label for="group-by-project">プロジェクトごとにまとめる</label>
+      <div class="sidebar-tools">
+        <div class="switch-field">
+          <button type="button" role="switch" id="group-by-project" class="switch" aria-checked="true"><span class="switch-thumb"></span></button>
+          <label for="group-by-project">プロジェクトごとにまとめる</label>
+        </div>
+        <button type="button" class="archive" data-status="closed" aria-pressed="false">済み<span class="count"></span></button>
       </div>
     </div>
     <p id="message" class="message" role="status" data-kind="loading">読み込み中…</p>
@@ -482,6 +505,8 @@
       <div class="detail-badges">
         <span class="badge risk"><span class="dot"></span><span class="label"></span></span>
         <span class="badge tests"><span class="dot"></span><span class="label"></span></span>
+        <span class="badge closed-state" hidden><span class="dot"></span><span class="label"></span></span>
+        <span class="badge decided-state" hidden><span class="dot"></span><span class="label"></span></span>
       </div>
     </header>
     <div class="detail-content">
@@ -540,6 +565,16 @@
     failed: { label: "テスト 失敗", tone: "bad" },
     not_run: { label: "テスト 未実行", tone: "warn" },
   };
+  const CLOSED = {
+    merged: { label: "マージ済み", tone: "good" },
+    closed: { label: "close 済み", tone: "muted" },
+  };
+  const DECIDED_BEFORE_CLOSING = {
+    pending: { label: "判断 未判断のまま", tone: "muted" },
+    on_hold: { label: "判断 保留", tone: "muted" },
+    requested: { label: "判断 レビュー依頼", tone: "muted" },
+    returned: { label: "判断 差し戻し", tone: "muted" },
+  };
   const AGENT_NAMES = { claude: "Claude", codex: "Codex" };
   const agentName = (triage) => AGENT_NAMES[triage.session?.agent] ?? "Claude";
   const CONFIRMATIONS = {
@@ -577,7 +612,7 @@
   const FIRST_CONTROL = ".actions button, .pr-link";
   const app = document.querySelector(".app");
   const main = document.querySelector(".main");
-  const tabs = [...document.querySelectorAll(".tabs-trigger")];
+  const tabs = [...document.querySelectorAll(".tabs-trigger, .archive")];
   const threads = document.getElementById("threads");
   const detailSlot = document.getElementById("detail");
   const message = document.getElementById("message");
@@ -616,7 +651,7 @@
 
   function updateViewState(previouslyReceived) {
     const byId = new Map(triages.map((triage) => [triage.id, triage]));
-    const keys = new Set(triages.map((triage) => projectKey(triage.status, triage.report.repo)));
+    const keys = new Set(triages.map((triage) => projectKey(tabOf(triage), triage.report.repo)));
     for (const key of collapsedProjects) {
       if (!keys.has(key)) {
         collapsedProjects.delete(key);
@@ -629,7 +664,7 @@
     }
     for (const triage of triages) {
       if (previouslyReceived.get(triage.id) !== triage.received_at) {
-        collapsedProjects.delete(projectKey(triage.status, triage.report.repo));
+        collapsedProjects.delete(projectKey(tabOf(triage), triage.report.repo));
       }
     }
   }
@@ -639,12 +674,13 @@
     selectedId = match ? Number(match[1]) : null;
     const selected = triages.find((triage) => triage.id === selectedId);
     if (selected) {
-      selectedStatus = selected.status;
+      selectedStatus = tabOf(selected);
     }
   }
 
   function dropSelectionOutsideTab() {
-    if (selectedId !== null && triages.find((triage) => triage.id === selectedId)?.status !== selectedStatus) {
+    const selected = triages.find((triage) => triage.id === selectedId);
+    if (selectedId !== null && (!selected || tabOf(selected) !== selectedStatus)) {
       selectQuietly(null);
     }
   }
@@ -654,8 +690,12 @@
     history.replaceState(null, "", id === null ? `${location.pathname}${location.search}` : `#pr-${id}`);
   }
 
+  function tabOf(triage) {
+    return triage.closed ? "closed" : triage.status;
+  }
+
   function shownIn(status) {
-    return triages.filter((triage) => triage.status === status);
+    return triages.filter((triage) => tabOf(triage) === status);
   }
 
   function orderedIn(status) {
@@ -757,7 +797,7 @@
     const { report } = triage;
     const risk = RISKS[report.risk];
     thread.href = `#pr-${triage.id}`;
-    thread.dataset.tone = risk.tone;
+    thread.dataset.tone = triage.closed ? CLOSED[triage.closed].tone : risk.tone;
     if (triage === highlighted) {
       thread.setAttribute("aria-current", "page");
     }
@@ -765,7 +805,10 @@
     setText(
       thread,
       ".thread-meta",
-      [groupByProject ? `#${report.number}` : `${report.repo} #${report.number}`, risk.label, ageOf(triage.received_at)].join(" · "),
+      [
+        groupByProject ? `#${report.number}` : `${report.repo} #${report.number}`,
+        ...(triage.closed ? [CLOSED[triage.closed].label] : [risk.label, ageOf(triage.received_at)]),
+      ].join(" · "),
     );
     return thread;
   }
@@ -830,6 +873,12 @@
     );
     setBadge(detail, ".risk", RISKS[report.risk]);
     setBadge(detail, ".tests", TESTS[report.tests.status]);
+    if (triage.closed) {
+      setBadge(detail, ".closed-state", CLOSED[triage.closed]);
+      setBadge(detail, ".decided-state", DECIDED_BEFORE_CLOSING[triage.status]);
+      detail.querySelector(".closed-state").hidden = false;
+      detail.querySelector(".decided-state").hidden = false;
+    }
     setItems(detail, ".summary", report.summary);
     setText(detail, ".why", report.why);
     setItems(detail, ".concerns", report.concerns.length ? report.concerns : ["なし"]);
@@ -1082,6 +1131,26 @@
     }
   }
 
+  async function syncClosed() {
+    try {
+      const response = await fetch("/api/prs/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      if (!response.ok) {
+        const problem = await response.json().catch(() => ({}));
+        console.warn("閉じた PR を確かめられませんでした", problem.error ?? response.status);
+        return;
+      }
+      if ((await response.json()).closed > 0) {
+        await refresh();
+      }
+    } catch (error) {
+      console.warn("閉じた PR を確かめられませんでした", error);
+    }
+  }
+
   for (const tab of tabs) {
     tab.addEventListener("click", () => {
       selectedStatus = tab.dataset.status;
@@ -1116,8 +1185,13 @@
     dropSelectionOutsideTab();
     render();
   });
-  window.addEventListener("focus", refresh);
-  refresh();
+  async function load() {
+    await refresh();
+    await syncClosed();
+  }
+
+  window.addEventListener("focus", load);
+  load();
 </script>
 </body>
 </html>

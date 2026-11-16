@@ -2,6 +2,7 @@ import json
 import socket
 import threading
 from collections.abc import Callable
+from datetime import UTC, datetime
 from http.client import HTTPConnection
 
 import pytest
@@ -12,11 +13,15 @@ from server import (
     ROOT,
     DashboardHandler,
     DashboardServer,
+    FetchStates,
+    GhFailed,
     ResumeSession,
     TriageStore,
+    parse_report,
 )
 
 CLIENT_TIMEOUT_SECONDS = 5
+SYNC_REQUEST = (b"{}", {"Content-Type": "application/json"})
 
 
 def send(
@@ -156,9 +161,10 @@ def test_stops_serving_when_asked_to_shut_down(
     store: TriageStore,
     recording_gh: Callable[[list[str], str], None],
     recording_resume: ResumeSession,
+    recording_states: FetchStates,
 ) -> None:
     server = DashboardServer(
-        0, store, ROOT / "static" / "index.html", recording_gh, recording_resume
+        0, store, ROOT / "static" / "index.html", recording_gh, recording_resume, recording_states
     )
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
@@ -195,3 +201,74 @@ def test_serves_the_page_and_keeps_other_sites_from_framing_it(port: int) -> Non
     assert response.getheader("Content-Type") == "text/html; charset=utf-8"
     assert "frame-ancestors 'none'" in response.getheader("Content-Security-Policy", "")
     assert "<title>toriage</title>" in body.decode()
+
+
+def test_the_page_can_ask_for_a_check(
+    port: int,
+    store: TriageStore,
+    report: dict[str, object],
+    github_states: dict[tuple[str, int], str],
+) -> None:
+    store.save(parse_report(report), datetime.now(UTC))
+    github_states[("acme/web", 128)] = "MERGED"
+
+    status, body = send(port, "POST", "/api/prs/sync", *SYNC_REQUEST)
+    _, listed = send(port, "GET", "/api/prs")
+
+    assert (status, json.loads(body)) == (200, {"closed": 1})
+    assert [triage["closed"] for triage in json.loads(listed)] == ["merged"]
+
+
+def test_reports_a_failed_check_and_changes_nothing(
+    port: int,
+    store: TriageStore,
+    report: dict[str, object],
+    state_failures: list[GhFailed],
+) -> None:
+    store.save(parse_report(report), datetime.now(UTC))
+    state_failures.append(GhFailed("gh auth login が要る"))
+
+    status, body = send(port, "POST", "/api/prs/sync", *SYNC_REQUEST)
+
+    assert status == 502
+    assert "gh auth login" in json.loads(body)["error"]
+    [triage] = store.list_triages()
+    assert triage.closed is None
+
+
+def test_refuses_a_check_from_another_site(
+    port: int, state_requests: list[list[tuple[str, int]]]
+) -> None:
+    status, _ = send(
+        port,
+        "POST",
+        "/api/prs/sync",
+        SYNC_REQUEST[0],
+        SYNC_REQUEST[1] | {"Origin": "https://example.com"},
+    )
+
+    assert status == 403
+    assert state_requests == []
+
+
+def test_refuses_a_check_that_is_not_json(
+    port: int, state_requests: list[list[tuple[str, int]]]
+) -> None:
+    status, _ = send(port, "POST", "/api/prs/sync", b"{}", {"Content-Type": "text/plain"})
+
+    assert status == 415
+    assert state_requests == []
+
+
+def test_checks_again_without_waiting_after_a_new_report(
+    port: int, report: dict[str, object], state_requests: list[list[tuple[str, int]]]
+) -> None:
+    post_report(port, report)
+    send(port, "POST", "/api/prs/sync", *SYNC_REQUEST)
+    send(port, "POST", "/api/prs/sync", *SYNC_REQUEST)
+    assert len(state_requests) == 1
+
+    post_report(port, report)
+    send(port, "POST", "/api/prs/sync", *SYNC_REQUEST)
+
+    assert len(state_requests) == 2
