@@ -519,7 +519,7 @@ def resume_in_background(logs: Path) -> ResumeSession:
             try:
                 marker.write_text(f"{process.pid}\n", encoding="utf-8")
             except OSError as error:
-                with suppress(ProcessLookupError):
+                with suppress(ProcessLookupError, PermissionError):
                     os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
                 raise ResumeFailed(f"再開したことを書き残せなかったので止めた: {error}") from error

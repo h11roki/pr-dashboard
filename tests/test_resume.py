@@ -402,6 +402,24 @@ def test_stops_the_agent_and_what_it_started_when_it_cannot_record_the_resume(
     wait_until(lambda: not is_running(int(child_pid.read_text(encoding="utf-8"))))
 
 
+def test_reports_that_it_could_not_record_even_when_the_agent_has_already_exited(
+    tmp_path: Path, fake_agent: FakeAgent, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (fake_agent.bin_dir / "claude").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+
+    class PopenAfterTheAgentExits(subprocess.Popen[bytes]):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            os.waitid(os.P_PID, self.pid, os.WEXITED | os.WNOWAIT)
+
+    monkeypatch.setattr(subprocess, "Popen", PopenAfterTheAgentExits)
+    logs = tmp_path / "returns"
+    (logs / f"{SESSION_ID}.pid").mkdir(parents=True)
+
+    with pytest.raises(ResumeFailed, match="書き残せなかった"):
+        resume_in_background(logs)(Session(id=SESSION_ID, workdir=str(workdir)), "直して")
+
+
 def test_fails_when_the_workdir_is_gone(tmp_path: Path, fake_agent: FakeAgent) -> None:
     session = Session(id=SESSION_ID, workdir=str(tmp_path / "removed-worktree"))
 
