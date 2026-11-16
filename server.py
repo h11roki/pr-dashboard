@@ -5,6 +5,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import asdict, dataclass
@@ -31,6 +32,8 @@ TEST_STATUSES = ("passed", "failed", "not_run")
 ACTION_PATH = re.compile(r"/api/prs/([0-9]{1,10})/(request-review|return|hold)")
 MAX_REASON_LENGTH = 2000
 GH_TIMEOUT_SECONDS = 30
+SYNC_INTERVAL_SECONDS = 300
+CLOSED_STATES = {"MERGED": "merged", "CLOSED": "closed"}
 REPORT_COMMAND = "toriage-report"
 PLUGIN_MANIFEST = Path(".claude-plugin") / "plugin.json"
 INHERITED_SESSION_VARIABLES = frozenset(
@@ -78,6 +81,7 @@ CREATE TABLE IF NOT EXISTS prs (
     payload TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'requested', 'returned', 'on_hold')),
+    closed TEXT CHECK (closed IN ('merged', 'closed')),
     note TEXT,
     received_at TEXT NOT NULL,
     decided_at TEXT,
@@ -85,11 +89,16 @@ CREATE TABLE IF NOT EXISTS prs (
 )
 """
 
+ADD_CLOSED_COLUMN = """
+ALTER TABLE prs ADD COLUMN closed TEXT CHECK (closed IN ('merged', 'closed'))
+"""
+
 UPSERT_REPORT = """
 INSERT INTO prs (repo, number, payload, received_at) VALUES (?, ?, ?, ?)
 ON CONFLICT (repo, number) DO UPDATE SET
     payload = excluded.payload,
     received_at = excluded.received_at,
+    closed = NULL,
     status = CASE status WHEN 'returned' THEN 'pending' ELSE status END,
     note = CASE status WHEN 'returned' THEN NULL ELSE note END,
     decided_at = CASE status WHEN 'returned' THEN NULL ELSE decided_at END
@@ -97,12 +106,21 @@ WHERE excluded.received_at > prs.received_at
 """
 
 SELECT_TRIAGES = """
-SELECT id, repo, number, status, note, received_at, decided_at, payload FROM prs
+SELECT id, repo, number, status, closed, note, received_at, decided_at, payload FROM prs
 ORDER BY received_at DESC, id DESC
 """
 
 SELECT_TRIAGE = """
-SELECT id, repo, number, status, note, received_at, decided_at, payload FROM prs WHERE id = ?
+SELECT id, repo, number, status, closed, note, received_at, decided_at, payload FROM prs
+WHERE id = ?
+"""
+
+SELECT_OPEN = """
+SELECT id, repo, number FROM prs WHERE closed IS NULL
+"""
+
+MARK_CLOSED = """
+UPDATE prs SET closed = ? WHERE id = ? AND closed IS NULL
 """
 
 SELECT_DECISION_STATE = """
@@ -114,6 +132,7 @@ UPDATE prs SET status = ?, note = ?, decided_at = ? WHERE id = ?
 """
 
 RunGh = Callable[[list[str], str], None]
+FetchStates = Callable[[list[tuple[str, int]]], dict[tuple[str, int], str]]
 
 
 class Action(StrEnum):
@@ -224,6 +243,7 @@ class Triage:
     repo: str
     number: int
     status: str
+    closed: str | None
     note: str | None
     received_at: str
     decided_at: str | None
@@ -347,7 +367,11 @@ class TriageStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._connection = sqlite3.connect(path, check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
-        self._connection.execute(SCHEMA)
+        with self._connection:
+            self._connection.execute(SCHEMA)
+            columns = {row["name"] for row in self._connection.execute("PRAGMA table_info(prs)")}
+            if "closed" not in columns:
+                self._connection.execute(ADD_CLOSED_COLUMN)
         self._lock = threading.Lock()
 
     def save(self, report: Report, received_at: datetime) -> bool:
@@ -368,6 +392,18 @@ class TriageStore:
         with self._lock:
             row = self._connection.execute(SELECT_TRIAGE, (triage_id,)).fetchone()
         return None if row is None else self._triage(row)
+
+    def open_pull_requests(self) -> list[tuple[int, str, int]]:
+        with self._lock:
+            rows = self._connection.execute(SELECT_OPEN).fetchall()
+        return [(row["id"], row["repo"], row["number"]) for row in rows]
+
+    def mark_closed(self, closed: dict[int, str]) -> int:
+        with self._lock, self._connection:
+            return sum(
+                self._connection.execute(MARK_CLOSED, (state, triage_id)).rowcount
+                for triage_id, state in closed.items()
+            )
 
     def decide(
         self, triage: Triage, status: str, note: str | None, decided_at: datetime
@@ -390,6 +426,7 @@ class TriageStore:
             repo=row["repo"],
             number=row["number"],
             status=row["status"],
+            closed=row["closed"],
             note=row["note"],
             received_at=row["received_at"],
             decided_at=row["decided_at"],
@@ -403,7 +440,7 @@ class TriageStore:
             actions=tuple(
                 action
                 for action in ALLOWED_ACTIONS.get(row["status"], ())
-                if action is not Action.RETURN or session is not None
+                if row["closed"] is None and (action is not Action.RETURN or session is not None)
             ),
         )
 
@@ -424,9 +461,9 @@ def parse_body(body: bytes) -> Report:
     return parse_report(load_json(body, InvalidReport))
 
 
-def run_gh(arguments: list[str], stdin: str) -> None:
+def _gh(arguments: list[str], stdin: str) -> subprocess.CompletedProcess[str]:
     try:
-        completed = subprocess.run(
+        return subprocess.run(
             ["gh", *arguments],
             input=stdin,
             capture_output=True,
@@ -440,8 +477,48 @@ def run_gh(arguments: list[str], stdin: str) -> None:
         ) from error
     except OSError as error:
         raise GhFailed(f"gh を実行できなかった: {error}") from error
+
+
+def run_gh(arguments: list[str], stdin: str) -> None:
+    completed = _gh(arguments, stdin)
     if completed.returncode != 0:
         raise GhFailed(completed.stderr.strip() or f"gh が {completed.returncode} で終わった")
+
+
+def pull_request_states(pull_requests: list[tuple[str, int]]) -> dict[tuple[str, int], str]:
+    fields = []
+    for index, (repo, number) in enumerate(pull_requests):
+        owner, name = repo.split("/", 1)
+        fields.append(
+            f"p{index}: repository(owner: {json.dumps(owner)}, name: {json.dumps(name)})"
+            f" {{ pullRequest(number: {number}) {{ state }} }}"
+        )
+    completed = _gh(["api", "graphql", "-f", f"query=query {{ {' '.join(fields)} }}"], "")
+    try:
+        data = json.loads(completed.stdout)["data"]
+    except (ValueError, KeyError, TypeError) as error:
+        raise GhFailed(completed.stderr.strip() or "gh の答えを読めなかった") from error
+    states = {}
+    for index, pull_request in enumerate(pull_requests):
+        repository = data.get(f"p{index}") if isinstance(data, dict) else None
+        found = repository.get("pullRequest") if isinstance(repository, dict) else None
+        state = found.get("state") if isinstance(found, dict) else None
+        if isinstance(state, str):
+            states[pull_request] = state
+    return states
+
+
+def sync_closed(store: TriageStore, fetch_states: FetchStates) -> int:
+    open_prs = store.open_pull_requests()
+    if not open_prs:
+        return 0
+    states = fetch_states([(repo, number) for _, repo, number in open_prs])
+    closed = {}
+    for triage_id, repo, number in open_prs:
+        state = states.get((repo, number))
+        if state in CLOSED_STATES:
+            closed[triage_id] = CLOSED_STATES[state]
+    return store.mark_closed(closed)
 
 
 def resume_in_background(logs: Path) -> ResumeSession:
@@ -620,18 +697,39 @@ def import_inbox(inbox: Path, store: TriageStore) -> int:
 
 class DashboardServer(ThreadingHTTPServer):
     def __init__(
-        self, port: int, store: TriageStore, page: Path, gh: RunGh, resume: ResumeSession
+        self,
+        port: int,
+        store: TriageStore,
+        page: Path,
+        gh: RunGh,
+        resume: ResumeSession,
+        fetch_states: FetchStates,
     ) -> None:
         super().__init__((HOST, port), DashboardHandler)
         self.store = store
         self.page = page.read_bytes()
         self.gh = gh
         self.resume = resume
+        self.fetch_states = fetch_states
         self.decision_lock = threading.Lock()
+        self.sync_lock = threading.Lock()
+        self.synced_at: float | None = None
         self.allowed_hosts = frozenset(
             {f"{HOST}:{self.server_port}", f"localhost:{self.server_port}"}
         )
         self.allowed_origins = frozenset(f"http://{host}" for host in self.allowed_hosts)
+
+    def sync_closed_if_due(self) -> int:
+        if not self.sync_lock.acquire(blocking=False):
+            return 0
+        try:
+            now = time.monotonic()
+            if self.synced_at is not None and now - self.synced_at < SYNC_INTERVAL_SECONDS:
+                return 0
+            self.synced_at = now
+            return sync_closed(self.store, self.fetch_states)
+        finally:
+            self.sync_lock.release()
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -657,6 +755,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._reject(HTTPStatus.FORBIDDEN, "ほかのサイトからの要求は受け付けない")
         elif path == "/api/prs":
             self._receive_report()
+        elif path == "/api/prs/sync":
+            self._sync_closed()
         elif path == "/api/shutdown":
             self._send_json(HTTPStatus.OK, {})
             self.server.shutdown()
@@ -701,6 +801,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         saved = self.server.store.save(report, datetime.now(UTC))
         self._send_json(HTTPStatus.OK, {"saved": saved})
+
+    def _sync_closed(self) -> None:
+        try:
+            closed = self.server.sync_closed_if_due()
+        except (GhFailed, sqlite3.Error) as error:
+            self.log_message("PR の状態を GitHub で確かめられなかった: %s", error)
+            self._reject(
+                HTTPStatus.BAD_GATEWAY, f"PR の状態を GitHub で確かめられなかった: {error}"
+            )
+            return
+        self._send_json(HTTPStatus.OK, {"closed": closed})
 
     def _decide(self, triage_id: int, action: Action) -> None:
         body = self._read_json_body()
@@ -756,7 +867,12 @@ def main() -> None:
     home = data_home()
     store = TriageStore(home / "prs.db")
     server = DashboardServer(
-        PORT, store, ROOT / "static" / "index.html", run_gh, resume_in_background(home / "returns")
+        PORT,
+        store,
+        ROOT / "static" / "index.html",
+        run_gh,
+        resume_in_background(home / "returns"),
+        pull_request_states,
     )
     pid_file = home / "server.pid"
     pid_file.write_text(f"{os.getpid()}\n", encoding="utf-8")

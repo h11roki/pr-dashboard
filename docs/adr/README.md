@@ -53,3 +53,4 @@
 | [0012](0012-resume-with-the-current-report-command.md) | 裏で再開する Claude には、サーバーが持つ toriage の bin を PATH から外して渡す | 承認 |
 | [0013](0013-open-the-dashboard-after-reporting.md) | 送信スクリプトは、報告がダッシュボードに届いたらブラウザで開く | 承認 |
 | [0015](0015-thread-view.md) | 画面を、左に PR の一覧、右に選んだ PR の中身を出す 2 ペインにする | 承認 |
+| [0016](0016-move-closed-prs.md) | マージや close をした PR は、画面を開いたときに GitHub で確かめて「済み」に移す | 承認 |

@@ -15,6 +15,7 @@ from server import (
     ROOT,
     DashboardServer,
     DecisionError,
+    FetchStates,
     GhFailed,
     ResumeSession,
     Session,
@@ -117,13 +118,44 @@ def recording_resume(
 
 
 @pytest.fixture
+def github_states() -> dict[tuple[str, int], str]:
+    return {}
+
+
+@pytest.fixture
+def state_requests() -> list[list[tuple[str, int]]]:
+    return []
+
+
+@pytest.fixture
+def state_failures() -> list[GhFailed]:
+    return []
+
+
+@pytest.fixture
+def recording_states(
+    github_states: dict[tuple[str, int], str],
+    state_requests: list[list[tuple[str, int]]],
+    state_failures: list[GhFailed],
+) -> FetchStates:
+    def fetch(pull_requests: list[tuple[str, int]]) -> dict[tuple[str, int], str]:
+        state_requests.append(pull_requests)
+        if state_failures:
+            raise state_failures[0]
+        return {found: github_states[found] for found in pull_requests if found in github_states}
+
+    return fetch
+
+
+@pytest.fixture
 def port(
     store: TriageStore,
     recording_gh: Callable[[list[str], str], None],
     recording_resume: ResumeSession,
+    recording_states: FetchStates,
 ) -> Iterator[int]:
     server = DashboardServer(
-        0, store, ROOT / "static" / "index.html", recording_gh, recording_resume
+        0, store, ROOT / "static" / "index.html", recording_gh, recording_resume, recording_states
     )
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
