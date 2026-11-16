@@ -85,9 +85,7 @@
     border-bottom: 1px solid var(--border);
     background: var(--sidebar);
   }
-  .brand { display: grid; gap: 2px; }
-  .brand h1 { font-size: 18px; line-height: 28px; font-weight: 600; letter-spacing: -0.025em; }
-  .brand p { color: var(--muted-foreground); font-size: 13px; }
+  .brand { font-size: 18px; line-height: 28px; font-weight: 600; letter-spacing: -0.025em; }
 
   .tabs-list {
     display: flex;
@@ -449,10 +447,7 @@
   <p id="load-error" class="load-error" role="alert" hidden></p>
   <aside class="sidebar">
     <div class="sidebar-header">
-      <div class="brand">
-        <h1>toriage</h1>
-        <p>Claude Code や Codex が作った PR を読み、レビューに出すかを決める</p>
-      </div>
+      <h1 class="brand">toriage</h1>
       <nav class="tabs-list" aria-label="判断の状態">
         <button type="button" class="tabs-trigger" data-status="pending" aria-pressed="true">未判断<span class="count"></span></button>
         <button type="button" class="tabs-trigger" data-status="on_hold" aria-pressed="false">保留<span class="count"></span></button>
