@@ -52,3 +52,4 @@
 | [0011](0011-return-to-the-session.md) | 差し戻しは、PR を出した Claude のセッションを裏で再開して理由を渡す | 承認 |
 | [0012](0012-resume-with-the-current-report-command.md) | 裏で再開する Claude には、サーバーが持つ toriage の bin を PATH から外して渡す | 承認 |
 | [0013](0013-open-the-dashboard-after-reporting.md) | 送信スクリプトは、報告がダッシュボードに届いたらブラウザで開く | 承認 |
+| [0015](0015-thread-view.md) | 画面を、左に PR の一覧、右に選んだ PR の中身を出す 2 ペインにする | 承認 |
