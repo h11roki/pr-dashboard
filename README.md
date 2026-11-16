@@ -36,7 +36,7 @@ toriage では、PR を作ったエージェント自身が「何を変えたか
 </picture>
 
 1. Claude Code か Codex を開くと、フックがダッシュボードのサーバーを裏で起動します(Codex はフックを信頼してから)
-2. PR を作ったあと、Claude Code か Codex がスキル `toriage:report` に従って判断材料の JSON を書き、`toriage-report` で送ります。届くと、ダッシュボードがブラウザで開きます
+2. PR を作ったあと、Claude Code か Codex がスキル `toriage:report` に従って判断材料の JSON を書き、`toriage-report` で送ります。届くと、通知で知らせます
 3. 送る前に、サーバーと同じ検証を通します。ダッシュボードに届かなかったときは inbox に置き、次に起動したときに取り込みます
 4. 人がブラウザで判断すると、サーバーが反映します。レビュー依頼は `gh` で GitHub に、差し戻しは PR を作った Claude Code か Codex の会話を裏で再開して理由を渡します
 
@@ -95,7 +95,7 @@ PR を作ったら、スキル toriage:report でダッシュボードに判断�
 
 同じ PR を送り直すと、判断材料は新しい内容に置き換わります。差し戻した PR を直して送り直すと、未判断に戻ります。
 
-報告が届くたびに、`toriage-report` がダッシュボードをブラウザで開きます(macOS は `open`、Linux は `xdg-open`。SSH でつないだときなど、画面の無い Linux では開きません)。開いているタブがあっても、新しいタブで開きます。開かないようにするには、環境変数 `TORIAGE_OPEN` を `0` にします。Claude Code の `settings.json` の `env` に書くと、差し戻しで裏で再開した Claude にも効きます。Codex では `config.toml` の `shell_environment_policy.set` に書きます。inbox に保存したときは開きません。
+報告が届くたびに、`toriage-report` が通知で知らせます。ページは開きません。macOS は通知センターに出し、[terminal-notifier](https://github.com/julienXX/terminal-notifier)(`brew install terminal-notifier`)が入っていれば、通知を押すとダッシュボードが開きます。入っていなければ `osascript` で出し、押しても開きません。macOS の設定で「スクリプトエディタ」の通知を許していないと出ません。Linux は、画面があって `notify-send` があるときだけ出します。通知を止めるには、環境変数 `TORIAGE_NOTIFY` を `0` にします。Claude Code の `settings.json` の `env` に書くと、差し戻しで裏で再開した Claude にも効きます。Codex では `config.toml` の `shell_environment_policy.set` に書きます。inbox に保存したときは出しません。
 
 Codex はプラグインの `bin` を PATH に入れないので、スキルに書いた場所から送信スクリプトを動かします。手元のダッシュボードと GitHub につなぐため、送るたびにサンドボックスの外で動かす許可を求めます。
 

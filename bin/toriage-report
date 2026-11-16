@@ -104,15 +104,20 @@ saved="$(jq -r '.saved' "$response" 2>/dev/null)" || saved=""
 case "$saved" in
   true)
     echo "ダッシュボードに送った: $label"
-    if [ "${TORIAGE_OPEN:-}" != 0 ]; then
-      opener=""
+    if [ "${TORIAGE_NOTIFY:-}" != 0 ]; then
+      title="$(jq -r '.title' <<<"$body")"
+      subtitle="$label · リスク $(jq -r '{low: "低", medium: "中", high: "高"}[.risk]' <<<"$body")"
       if [ "$(uname -s)" = Darwin ]; then
-        opener=open
-      elif [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
-        opener=xdg-open
-      fi
-      if [ -n "$opener" ] && command -v "$opener" >/dev/null; then
-        nohup "$opener" "$dashboard" </dev/null >/dev/null 2>&1 &
+        if command -v terminal-notifier >/dev/null; then
+          nohup terminal-notifier -title toriage -subtitle "$subtitle" -message "$title" \
+            -open "$dashboard" </dev/null >/dev/null 2>&1 &
+        else
+          nohup osascript -e 'on run argv' \
+            -e 'display notification (item 3 of argv) with title (item 1 of argv) subtitle (item 2 of argv)' \
+            -e 'end run' toriage "$subtitle" "$title" </dev/null >/dev/null 2>&1 &
+        fi
+      elif [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v notify-send >/dev/null; then
+        nohup notify-send toriage "$subtitle"$'\n'"$title" </dev/null >/dev/null 2>&1 &
       fi
     fi
     ;;

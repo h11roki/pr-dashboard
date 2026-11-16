@@ -26,28 +26,37 @@ GH_PR_VIEW = {
 }
 
 
-OPENERS = ("open", "xdg-open")
+NOTIFIERS = ("osascript", "notify-send")
+END_OF_CALL = "-- end of call --"
+SUBTITLE = "acme/web#128 · リスク 中"
+
+
+def write_command(bin_dir: Path, name: str, body: str) -> None:
+    command = bin_dir / name
+    command.write_text(f"#!/usr/bin/env bash\n{body}\n", encoding="utf-8")
+    command.chmod(0o755)
+
+
+def recorder(tmp_path: Path) -> str:
+    return f'printf "%s\\n" "$(basename "$0")" "$@" "{END_OF_CALL}" >> "{tmp_path / "notified"}"'
 
 
 def write_commands(tmp_path: Path, gh_body: str) -> Path:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    opener_body = f'echo "$1" >> "{tmp_path / "opened"}"'
-    commands = {"gh": gh_body} | dict.fromkeys(OPENERS, opener_body)
-    for name, body in commands.items():
-        command = bin_dir / name
-        command.write_text(f"#!/usr/bin/env bash\n{body}\n", encoding="utf-8")
-        command.chmod(0o755)
+    write_command(bin_dir, "gh", gh_body)
+    for name in NOTIFIERS:
+        write_command(bin_dir, name, recorder(tmp_path))
     return bin_dir
 
 
-def opened_urls(tmp_path: Path, seconds: float) -> list[str]:
-    record = tmp_path / "opened"
+def notified(tmp_path: Path, seconds: float) -> str:
+    record = tmp_path / "notified"
     deadline = time.monotonic() + seconds
     while True:
         text = record.read_text(encoding="utf-8") if record.exists() else ""
-        if text.endswith("\n") or time.monotonic() >= deadline:
-            return text.splitlines()
+        if text.endswith(f"{END_OF_CALL}\n") or time.monotonic() >= deadline:
+            return text
         time.sleep(0.05)
 
 
@@ -69,7 +78,7 @@ def run_script(
     session_id: str | None = None,
     codex_thread_id: str | None = None,
     cwd: Path | None = None,
-    open_setting: str | None = "0",
+    notify_setting: str | None = "0",
     display: str | None = ":0",
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ | {
@@ -80,7 +89,7 @@ def run_script(
         ("TORIAGE_URL", dashboard),
         ("CLAUDE_CODE_SESSION_ID", session_id),
         ("CODEX_THREAD_ID", codex_thread_id),
-        ("TORIAGE_OPEN", open_setting),
+        ("TORIAGE_NOTIFY", notify_setting),
         ("DISPLAY", display),
         ("WAYLAND_DISPLAY", None),
     ):
@@ -235,61 +244,107 @@ def test_does_not_take_the_session_from_the_judgment(
     assert triage.session is None
 
 
-def test_opens_the_dashboard_after_sending(
+def test_notifies_with_the_pr_after_sending(
     tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
 ) -> None:
     judgment = json.dumps(judgment_of(report))
 
     result = run_script(
-        fake_gh, judgment, f"http://{HOST}:{port}/", tmp_path / "home", "128", open_setting=None
+        fake_gh, judgment, f"http://{HOST}:{port}", tmp_path / "home", "128", notify_setting=None
     )
 
     assert result.returncode == 0, result.stderr
-    assert opened_urls(tmp_path, 5) == [f"http://{HOST}:{port}"]
+    record = notified(tmp_path, 5)
+    assert record.count(END_OF_CALL) == 1
+    assert SUBTITLE in record
+    assert str(GH_PR_VIEW["title"]) in record
 
 
-def test_does_not_open_the_dashboard_when_opening_is_turned_off(
+def test_passes_a_title_with_quotes_as_it_is(
+    tmp_path: Path, port: int, store: TriageStore, report: dict[str, object]
+) -> None:
+    title = 'say "done" & quit \\ 終わり'
+    facts = GH_PR_VIEW | {"title": title}
+    bin_dir = write_commands(
+        tmp_path, f"cat <<'JSON'\n{json.dumps(facts, ensure_ascii=False)}\nJSON"
+    )
+
+    result = run_script(
+        bin_dir,
+        json.dumps(judgment_of(report)),
+        f"http://{HOST}:{port}",
+        tmp_path / "home",
+        "128",
+        notify_setting=None,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert title in notified(tmp_path, 5).splitlines()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="terminal-notifier は macOS で使う")
+def test_lets_the_notification_open_the_dashboard_with_terminal_notifier(
+    tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
+) -> None:
+    write_command(fake_gh, "terminal-notifier", recorder(tmp_path))
+
+    result = run_script(
+        fake_gh,
+        json.dumps(judgment_of(report)),
+        f"http://{HOST}:{port}/",
+        tmp_path / "home",
+        "128",
+        notify_setting=None,
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = notified(tmp_path, 5).splitlines()
+    assert calls[0] == "terminal-notifier"
+    assert calls[calls.index("-open") + 1] == f"http://{HOST}:{port}"
+
+
+def test_does_not_notify_when_notifying_is_turned_off(
     tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
 ) -> None:
     judgment = json.dumps(judgment_of(report))
 
     result = run_script(
-        fake_gh, judgment, f"http://{HOST}:{port}", tmp_path / "home", "128", open_setting="0"
+        fake_gh, judgment, f"http://{HOST}:{port}", tmp_path / "home", "128", notify_setting="0"
     )
 
     assert result.returncode == 0, result.stderr
     assert len(store.list_triages()) == 1
-    assert opened_urls(tmp_path, 1) == []
+    assert notified(tmp_path, 1) == ""
 
 
-def test_does_not_open_the_dashboard_when_the_report_waits_in_the_inbox(
+def test_does_not_notify_when_the_report_waits_in_the_inbox(
     tmp_path: Path, report: dict[str, object], fake_gh: Path
 ) -> None:
     judgment = json.dumps(judgment_of(report))
 
-    result = run_script(fake_gh, judgment, REFUSED, tmp_path / "home", "128", open_setting=None)
+    result = run_script(fake_gh, judgment, REFUSED, tmp_path / "home", "128", notify_setting=None)
 
     assert result.returncode == 0, result.stderr
-    assert opened_urls(tmp_path, 1) == []
+    assert notified(tmp_path, 1) == ""
 
 
-def test_does_not_open_the_dashboard_when_a_newer_report_is_kept(
+def test_does_not_notify_when_a_newer_report_is_kept(
     tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
 ) -> None:
     store.save(parse_report(report), datetime.now(UTC) + timedelta(days=1))
     judgment = json.dumps(judgment_of(report))
 
     result = run_script(
-        fake_gh, judgment, f"http://{HOST}:{port}", tmp_path / "home", "128", open_setting=None
+        fake_gh, judgment, f"http://{HOST}:{port}", tmp_path / "home", "128", notify_setting=None
     )
 
     assert result.returncode == 0, result.stderr
     assert "置き換えなかった" in result.stderr
-    assert opened_urls(tmp_path, 1) == []
+    assert notified(tmp_path, 1) == ""
 
 
-@pytest.mark.skipif(sys.platform == "darwin", reason="macOS は画面の有無によらず open で開く")
-def test_does_not_open_the_dashboard_without_a_display(
+@pytest.mark.skipif(sys.platform == "darwin", reason="macOS は画面の有無によらず通知センターに出す")
+def test_does_not_notify_without_a_display(
     tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
 ) -> None:
     judgment = json.dumps(judgment_of(report))
@@ -300,13 +355,13 @@ def test_does_not_open_the_dashboard_without_a_display(
         f"http://{HOST}:{port}",
         tmp_path / "home",
         "128",
-        open_setting=None,
+        notify_setting=None,
         display=None,
     )
 
     assert result.returncode == 0, result.stderr
     assert len(store.list_triages()) == 1
-    assert opened_urls(tmp_path, 1) == []
+    assert notified(tmp_path, 1) == ""
 
 
 def test_keeps_the_report_in_the_inbox_when_the_dashboard_is_down(
