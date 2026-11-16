@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import server
 from server import (
     ROOT,
     SYNC_INTERVAL_SECONDS,
@@ -173,7 +174,7 @@ def write_gh(tmp_path: Path, output: str, code: int) -> Path:
     gh = bin_dir / "gh"
     gh.write_text(
         "#!/usr/bin/env bash\n"
-        f'printf "%s\\n" "$@" > "{tmp_path / "arguments"}"\n'
+        f'printf "%s\\n" "$@" >> "{tmp_path / "arguments"}"\n'
         f"cat <<'JSON'\n{output}\nJSON\n"
         'echo "Could not resolve to a Repository" >&2\n'
         f"exit {code}\n",
@@ -184,7 +185,7 @@ def write_gh(tmp_path: Path, output: str, code: int) -> Path:
 
 
 def test_reads_the_states_of_many_prs_in_one_query(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     answer = {
         "data": {
@@ -200,6 +201,7 @@ def test_reads_the_states_of_many_prs_in_one_query(
     states = pull_request_states([("acme/web", 128), ("acme/gone", 1), ("acme/api", 5)])
 
     assert states == {("acme/web", 128): "MERGED", ("acme/api", 5): "OPEN"}
+    assert "Could not resolve" in capsys.readouterr().err
     arguments = (tmp_path / "arguments").read_text(encoding="utf-8")
     assert arguments.startswith("api\ngraphql\n-f\n")
     assert (
@@ -248,3 +250,19 @@ def test_fails_when_github_returns_no_states_at_all(
 
     with pytest.raises(GhFailed, match="Could not resolve"):
         pull_request_states([("acme/web", 128)])
+
+
+def test_splits_many_prs_into_several_queries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    answer = {"data": {"p0": {"pullRequest": {"state": "MERGED"}}}}
+    monkeypatch.setenv(
+        "PATH", f"{write_gh(tmp_path, json.dumps(answer), 0)}{os.pathsep}/usr/bin:/bin"
+    )
+    monkeypatch.setattr(server, "STATES_PER_QUERY", 2)
+
+    states = pull_request_states([("acme/web", 1), ("acme/web", 2), ("acme/web", 3)])
+
+    assert states == {("acme/web", 1): "MERGED", ("acme/web", 3): "MERGED"}
+    calls = (tmp_path / "arguments").read_text(encoding="utf-8").count("graphql")
+    assert calls == 2

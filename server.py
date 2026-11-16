@@ -33,6 +33,7 @@ ACTION_PATH = re.compile(r"/api/prs/([0-9]{1,10})/(request-review|return|hold)")
 MAX_REASON_LENGTH = 2000
 GH_TIMEOUT_SECONDS = 30
 SYNC_INTERVAL_SECONDS = 300
+STATES_PER_QUERY = 50
 CLOSED_STATES = {"MERGED": "merged", "CLOSED": "closed"}
 REPORT_COMMAND = "toriage-report"
 PLUGIN_MANIFEST = Path(".claude-plugin") / "plugin.json"
@@ -501,6 +502,13 @@ def run_gh(arguments: list[str], stdin: str) -> None:
 
 
 def pull_request_states(pull_requests: list[tuple[str, int]]) -> dict[tuple[str, int], str]:
+    states = {}
+    for start in range(0, len(pull_requests), STATES_PER_QUERY):
+        states.update(_query_states(pull_requests[start : start + STATES_PER_QUERY]))
+    return states
+
+
+def _query_states(pull_requests: list[tuple[str, int]]) -> dict[tuple[str, int], str]:
     fields = []
     for index, (repo, number) in enumerate(pull_requests):
         owner, name = repo.split("/", 1)
@@ -515,6 +523,10 @@ def pull_request_states(pull_requests: list[tuple[str, int]]) -> dict[tuple[str,
         raise GhFailed(completed.stderr.strip() or "gh の答えを読めなかった") from error
     if not isinstance(data, dict):
         raise GhFailed(completed.stderr.strip() or "GitHub が PR の状態を返さなかった")
+    if completed.returncode != 0:
+        print(
+            f"{_now()} GitHub で読めなかった PR がある: {completed.stderr.strip()}", file=sys.stderr
+        )
     states = {}
     for index, pull_request in enumerate(pull_requests):
         repository = data.get(f"p{index}")
@@ -817,6 +829,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._reject(HTTPStatus.BAD_REQUEST, str(error))
             return
         saved = self.server.store.save(report, datetime.now(UTC))
+        if saved:
+            self.server.synced_at = None
         self._send_json(HTTPStatus.OK, {"saved": saved})
 
     def _sync_closed(self) -> None:
@@ -824,11 +838,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         try:
             closed = self.server.sync_closed_if_due()
-        except (GhFailed, sqlite3.Error) as error:
+        except GhFailed as error:
             self.log_message("PR の状態を GitHub で確かめられなかった: %s", error)
             self._reject(
                 HTTPStatus.BAD_GATEWAY, f"PR の状態を GitHub で確かめられなかった: {error}"
             )
+            return
+        except sqlite3.Error as error:
+            self.log_message("閉じた PR を記録できなかった: %s", error)
+            self._reject(HTTPStatus.INTERNAL_SERVER_ERROR, f"閉じた PR を記録できなかった: {error}")
             return
         self._send_json(HTTPStatus.OK, {"closed": closed})
 

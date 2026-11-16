@@ -258,3 +258,17 @@ def test_refuses_a_check_that_is_not_json(
 
     assert status == 415
     assert state_requests == []
+
+
+def test_checks_again_without_waiting_after_a_new_report(
+    port: int, report: dict[str, object], state_requests: list[list[tuple[str, int]]]
+) -> None:
+    post_report(port, report)
+    send(port, "POST", "/api/prs/sync", *SYNC_REQUEST)
+    send(port, "POST", "/api/prs/sync", *SYNC_REQUEST)
+    assert len(state_requests) == 1
+
+    post_report(port, report)
+    send(port, "POST", "/api/prs/sync", *SYNC_REQUEST)
+
+    assert len(state_requests) == 2

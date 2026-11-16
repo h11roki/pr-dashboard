@@ -506,6 +506,7 @@
         <span class="badge risk"><span class="dot"></span><span class="label"></span></span>
         <span class="badge tests"><span class="dot"></span><span class="label"></span></span>
         <span class="badge closed-state" hidden><span class="dot"></span><span class="label"></span></span>
+        <span class="badge decided-state" hidden><span class="dot"></span><span class="label"></span></span>
       </div>
     </header>
     <div class="detail-content">
@@ -567,6 +568,12 @@
   const CLOSED = {
     merged: { label: "マージ済み", tone: "good" },
     closed: { label: "close 済み", tone: "muted" },
+  };
+  const DECIDED_BEFORE_CLOSING = {
+    pending: { label: "判断 未判断のまま", tone: "muted" },
+    on_hold: { label: "判断 保留", tone: "muted" },
+    requested: { label: "判断 レビュー依頼", tone: "muted" },
+    returned: { label: "判断 差し戻し", tone: "muted" },
   };
   const CONFIRMATIONS = {
     "request-review": {
@@ -866,7 +873,9 @@
     setBadge(detail, ".tests", TESTS[report.tests.status]);
     if (triage.closed) {
       setBadge(detail, ".closed-state", CLOSED[triage.closed]);
+      setBadge(detail, ".decided-state", DECIDED_BEFORE_CLOSING[triage.status]);
       detail.querySelector(".closed-state").hidden = false;
+      detail.querySelector(".decided-state").hidden = false;
     }
     setItems(detail, ".summary", report.summary);
     setText(detail, ".why", report.why);
@@ -1173,12 +1182,13 @@
     dropSelectionOutsideTab();
     render();
   });
-  window.addEventListener("focus", () => {
-    refresh();
-    syncClosed();
-  });
-  refresh();
-  syncClosed();
+  async function load() {
+    await refresh();
+    await syncClosed();
+  }
+
+  window.addEventListener("focus", load);
+  load();
 </script>
 </body>
 </html>
