@@ -431,7 +431,7 @@
     <div class="sidebar-header">
       <div class="brand">
         <h1>toriage</h1>
-        <p>Claude Code が作った PR を読み、レビューに出すかを決める</p>
+        <p>Claude Code や Codex が作った PR を読み、レビューに出すかを決める</p>
       </div>
       <nav class="tabs-list" aria-label="判断の状態">
         <button type="button" class="tabs-trigger" data-status="pending" aria-pressed="true">未判断<span class="count"></span></button>
@@ -519,7 +519,7 @@
       </div>
       <div class="decision" hidden>
         <p class="decision-text"></p>
-        <textarea class="reason" rows="3" aria-label="差し戻す理由" placeholder="直してほしいことを書く(PR を作った Claude に渡します)"></textarea>
+        <textarea class="reason" rows="3" aria-label="差し戻す理由" placeholder="直してほしいことを書く"></textarea>
         <div class="decision-buttons">
           <button type="button" class="button" data-cancel>やめる</button>
           <button type="button" class="button primary" data-confirm></button>
@@ -540,6 +540,8 @@
     failed: { label: "テスト 失敗", tone: "bad" },
     not_run: { label: "テスト 未実行", tone: "warn" },
   };
+  const AGENT_NAMES = { claude: "Claude", codex: "Codex" };
+  const agentName = (triage) => AGENT_NAMES[triage.session?.agent] ?? "Claude";
   const CONFIRMATIONS = {
     "request-review": {
       label: "レビューに出す",
@@ -550,7 +552,8 @@
     },
     return: {
       label: "差し戻す",
-      text: () => "PR を作った Claude の会話を裏で再開し、理由を渡して直してもらいます。PR にはコメントしません。",
+      text: (triage) =>
+        `PR を作った ${agentName(triage)} の会話を裏で再開し、理由を渡して直してもらいます。PR にはコメントしません。`,
     },
   };
   const receivedFormat = new Intl.DateTimeFormat("ja-JP", {
@@ -930,6 +933,7 @@
       setText(panel, ".decision-text", CONFIRMATIONS[draft.action].text(triage));
       confirm.textContent = CONFIRMATIONS[draft.action].label;
       reason.hidden = draft.action !== "return";
+      reason.placeholder = `直してほしいことを書く(PR を作った ${agentName(triage)} に渡します)`;
       reason.value = draft.reason;
     }
 

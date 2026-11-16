@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from server import HOST, ROOT, Session, TriageStore, parse_report
+from server import HOST, ROOT, Agent, Session, TriageStore, parse_report
 
 SCRIPT = ROOT / "bin" / "toriage-report"
 REFUSED = f"http://{HOST}:1"
@@ -67,6 +67,7 @@ def run_script(
     home: Path,
     *args: str,
     session_id: str | None = None,
+    codex_thread_id: str | None = None,
     cwd: Path | None = None,
     open_setting: str | None = "0",
     display: str | None = ":0",
@@ -78,6 +79,7 @@ def run_script(
     for name, value in (
         ("TORIAGE_URL", dashboard),
         ("CLAUDE_CODE_SESSION_ID", session_id),
+        ("CODEX_THREAD_ID", codex_thread_id),
         ("TORIAGE_OPEN", open_setting),
         ("DISPLAY", display),
         ("WAYLAND_DISPLAY", None),
@@ -134,7 +136,51 @@ def test_attaches_the_claude_code_session_and_the_checkout_of_the_pr(
 
     assert result.returncode == 0, result.stderr
     [triage] = store.list_triages()
-    assert triage.session == Session(id=SESSION_ID, workdir=str(worktree.resolve()))
+    assert triage.session == Session(
+        id=SESSION_ID, workdir=str(worktree.resolve()), agent=Agent.CLAUDE
+    )
+
+
+def test_attaches_the_codex_thread_and_the_checkout_of_the_pr(
+    tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
+) -> None:
+    worktree = checkout_of(tmp_path, "feat/search-paging")
+
+    result = run_script(
+        fake_gh,
+        json.dumps(judgment_of(report)),
+        f"http://{HOST}:{port}",
+        tmp_path / "home",
+        "128",
+        codex_thread_id=SESSION_ID,
+        cwd=worktree,
+    )
+
+    assert result.returncode == 0, result.stderr
+    [triage] = store.list_triages()
+    assert triage.session == Session(
+        id=SESSION_ID, workdir=str(worktree.resolve()), agent=Agent.CODEX
+    )
+
+
+def test_does_not_attach_a_session_when_both_claude_code_and_codex_name_one(
+    tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
+) -> None:
+    result = run_script(
+        fake_gh,
+        json.dumps(judgment_of(report)),
+        f"http://{HOST}:{port}",
+        tmp_path / "home",
+        "128",
+        session_id=SESSION_ID,
+        codex_thread_id="0b5e7c3a-1d2f-7a40-9e1b-2c3d4e5f6a7b",
+        cwd=checkout_of(tmp_path, "feat/search-paging"),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "差し戻しはできない" in result.stderr
+    [triage] = store.list_triages()
+    assert triage.session is None
 
 
 def test_does_not_attach_the_session_outside_the_branch_of_the_pr(
