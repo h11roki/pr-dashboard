@@ -31,6 +31,8 @@ TEST_STATUSES = ("passed", "failed", "not_run")
 ACTION_PATH = re.compile(r"/api/prs/([0-9]{1,10})/(request-review|return|hold)")
 MAX_REASON_LENGTH = 2000
 GH_TIMEOUT_SECONDS = 30
+REPORT_COMMAND = "toriage-report"
+PLUGIN_MANIFEST = Path(".claude-plugin") / "plugin.json"
 INHERITED_SESSION_VARIABLES = frozenset(
     {
         "CLAUDECODE",
@@ -456,6 +458,7 @@ def resume_in_background(logs: Path) -> ResumeSession:
     def resume(session: Session, prompt: str) -> None:
         if not Path(session.workdir).is_dir():
             raise ResumeFailed(f"PR を作った場所 {session.workdir} がもうない")
+        environment = _resume_environment(session.workdir)
         log = logs / f"{session.id}.log"
         marker = logs / f"{session.id}.pid"
         with lock:
@@ -479,11 +482,7 @@ def resume_in_background(logs: Path) -> ResumeSession:
                             prompt,
                         ],
                         cwd=session.workdir,
-                        env={
-                            name: value
-                            for name, value in os.environ.items()
-                            if name not in INHERITED_SESSION_VARIABLES
-                        },
+                        env=environment,
                         stdin=subprocess.DEVNULL,
                         stdout=output,
                         stderr=subprocess.STDOUT,
@@ -500,6 +499,24 @@ def resume_in_background(logs: Path) -> ResumeSession:
         threading.Thread(target=wait_and_record, args=(process, log, marker), daemon=True).start()
 
     return resume
+
+
+def _resume_environment(workdir: str) -> dict[str, str]:
+    environment = {
+        name: value for name, value in os.environ.items() if name not in INHERITED_SESSION_VARIABLES
+    }
+    if "PATH" in environment:
+        environment["PATH"] = os.pathsep.join(
+            directory
+            for directory in environment["PATH"].split(os.pathsep)
+            if not _is_plugin_bin(Path(workdir, directory))
+        )
+    return environment
+
+
+def _is_plugin_bin(directory: Path) -> bool:
+    resolved = directory.resolve()
+    return (resolved / REPORT_COMMAND).is_file() and (resolved.parent / PLUGIN_MANIFEST).is_file()
 
 
 def _still_resuming(marker: Path, session: Session) -> bool:

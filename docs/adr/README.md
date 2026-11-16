@@ -50,3 +50,4 @@
 | [0009](0009-name-toriage.md) | 名前を toriage にする | 承認 |
 | [0010](0010-server-stops-itself.md) | 起動し直すときは、サーバーに自分で止まってもらう | 承認 |
 | [0011](0011-return-to-the-session.md) | 差し戻しは、PR を出した Claude のセッションを裏で再開して理由を渡す | 承認 |
+| [0012](0012-resume-with-the-current-report-command.md) | 裏で再開する Claude には、サーバーが持つ toriage の bin を PATH から外して渡す | 承認 |

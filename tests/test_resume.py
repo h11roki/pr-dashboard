@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import time
 from collections.abc import Callable
@@ -17,6 +18,7 @@ with open({calls!r}, "w") as calls:
             "args": sys.argv[1:],
             "cwd": os.getcwd(),
             "session_variable": os.environ.get("CLAUDE_CODE_SESSION_ID"),
+            "path": os.environ.get("PATH"),
         }},
         calls,
     )
@@ -36,6 +38,7 @@ def wait_until(probe: Callable[[], bool]) -> None:
 
 class FakeClaude:
     def __init__(self, root: Path) -> None:
+        self.bin_dir = root / "bin"
         self.calls = root / "calls.json"
         self.release = root / "release"
 
@@ -51,14 +54,13 @@ class FakeClaude:
 @pytest.fixture
 def fake_claude(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeClaude:
     fake = FakeClaude(tmp_path)
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    claude = bin_dir / "claude"
+    fake.bin_dir.mkdir()
+    claude = fake.bin_dir / "claude"
     claude.write_text(
         FAKE_CLAUDE.format(calls=str(fake.calls), release=str(fake.release)), encoding="utf-8"
     )
     claude.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+    monkeypatch.setenv("PATH", f"{fake.bin_dir}:/usr/bin:/bin")
     return fake
 
 
@@ -99,6 +101,82 @@ def test_resumes_the_session_in_its_workdir_with_auto_mode(
     wait_until(lambda: "終了コード 0" in log_of(logs))
     assert "に差し戻した" in log_of(logs)
     assert "直して送り直した" in log_of(logs)
+
+
+def install_report_command(bin_dir: Path) -> None:
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    command = bin_dir / "toriage-report"
+    command.write_text("#!/bin/sh\n", encoding="utf-8")
+    command.chmod(0o755)
+
+
+def install_plugin(root: Path) -> Path:
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
+    install_report_command(root / "bin")
+    return root / "bin"
+
+
+def test_leaves_out_the_plugin_bin_the_server_was_started_with(
+    tmp_path: Path, fake_claude: FakeClaude, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    older_plugin_bin = install_plugin(tmp_path / "plugins" / "toriage" / "0.1.0")
+    path_without_plugin = os.environ["PATH"]
+    monkeypatch.setenv("PATH", f"{older_plugin_bin}{os.pathsep}{path_without_plugin}")
+
+    resume_in_background(tmp_path / "returns")(
+        Session(id=SESSION_ID, workdir=str(workdir)), "直してください"
+    )
+
+    assert fake_claude.call()["path"] == path_without_plugin
+    fake_claude.finish()
+
+
+def test_leaves_out_a_plugin_bin_reached_through_a_symlink(
+    tmp_path: Path, fake_claude: FakeClaude, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    linked_bin = tmp_path / "linked-bin"
+    linked_bin.symlink_to(install_plugin(tmp_path / "plugins" / "toriage" / "0.1.0"))
+    path_without_plugin = os.environ["PATH"]
+    monkeypatch.setenv("PATH", f"{linked_bin}{os.pathsep}{path_without_plugin}")
+
+    resume_in_background(tmp_path / "returns")(
+        Session(id=SESSION_ID, workdir=str(workdir)), "直してください"
+    )
+
+    assert fake_claude.call()["path"] == path_without_plugin
+    fake_claude.finish()
+
+
+def test_checks_a_relative_path_entry_from_the_workdir(
+    tmp_path: Path, fake_claude: FakeClaude, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install_plugin(workdir)
+    data_home = tmp_path / "data-home"
+    data_home.mkdir()
+    monkeypatch.chdir(data_home)
+    path_without_plugin = os.environ["PATH"]
+    monkeypatch.setenv("PATH", f"bin{os.pathsep}{path_without_plugin}")
+
+    resume_in_background(tmp_path / "returns")(
+        Session(id=SESSION_ID, workdir=str(workdir)), "直してください"
+    )
+
+    assert fake_claude.call()["path"] == path_without_plugin
+    fake_claude.finish()
+
+
+def test_keeps_a_directory_that_holds_the_report_command_outside_a_plugin(
+    tmp_path: Path, fake_claude: FakeClaude, workdir: Path
+) -> None:
+    install_report_command(fake_claude.bin_dir)
+
+    resume_in_background(tmp_path / "returns")(
+        Session(id=SESSION_ID, workdir=str(workdir)), "直してください"
+    )
+
+    assert fake_claude.call()["path"] == os.environ["PATH"]
+    fake_claude.finish()
 
 
 def test_does_not_resume_a_session_that_is_still_running(
