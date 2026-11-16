@@ -41,6 +41,8 @@ if [ -n "$claude_session" ] && [ -z "$codex_session" ]; then
 elif [ -z "$claude_session" ] && [ -n "$codex_session" ]; then
   agent=codex
   session_id="$codex_session"
+elif [ -n "$claude_session" ]; then
+  echo "CLAUDE_CODE_SESSION_ID と CODEX_THREAD_ID の両方があり、どちらの会話から送ったか分からないので、この報告の差し戻しはできない" >&2
 fi
 
 body="$(jq -c --argjson facts "$facts" --arg session_id "$session_id" --arg agent "$agent" \

@@ -178,6 +178,7 @@ def test_does_not_attach_a_session_when_both_claude_code_and_codex_name_one(
     )
 
     assert result.returncode == 0, result.stderr
+    assert "差し戻しはできない" in result.stderr
     [triage] = store.list_triages()
     assert triage.session is None
 
