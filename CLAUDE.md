@@ -1,6 +1,6 @@
 # toriage
 
-Claude Code が作った PR の判断材料を受け取り、手元のブラウザで「レビューに出すか」を決めて、その場で反映する(レビュー依頼は GitHub に、差し戻しは PR を作った Claude に)ダッシュボード。Claude Code のプラグインとして配る。設計判断は `docs/adr/`、元になった設計書は「PRトリアージダッシュボード 企画・設計書」(旧名のまま)、使う人向けの説明は `README.md`。
+Claude Code や Codex が作った PR の判断材料を受け取り、手元のブラウザで「レビューに出すか」を決めて、その場で反映する(レビュー依頼は GitHub に、差し戻しは PR を作ったエージェントに)ダッシュボード。Claude Code のプラグインとして配り、Codex も同じものをそのまま入れる(0014)。設計判断は `docs/adr/`、元になった設計書は「PRトリアージダッシュボード 企画・設計書」(旧名のまま)、使う人向けの説明は `README.md`。
 
 ## コマンド
 
@@ -13,13 +13,13 @@ Claude Code が作った PR の判断材料を受け取り、手元のブラウ�
 
 - `server.py`: 報告の受け取り、検証、SQLite への保存、一覧と判断の API、画面の配信。実行時は Python の標準ライブラリだけを使う
 - `static/index.html`: 画面。HTML と素の JavaScript の 1 ファイル。サーバーは起動時に 1 回だけ読むので、書き換えたら起動し直す
-- `bin/toriage-report`: スキル `report` で Claude Code が呼ぶ送信スクリプト(プラグインが有効なあいだ Bash の PATH に入る)。Claude の判断材料(標準入力の JSON)に `gh pr view` の数字と、`CLAUDE_CODE_SESSION_ID` と実行した場所から作る `session` を足し、`server.py --check`(サーバーと同じ `parse_body` の検証)を通してから送る。つながらなければ `toriage-start` で起動して送り直し、届かなかったと分かるとき(curl の 6、7)だけ inbox に保存する(0006、0008)。保存したと答えたら、送り先の URL を `open`(macOS)か `xdg-open`(`DISPLAY` か `WAYLAND_DISPLAY` があるときだけ)で、`nohup` を付けて裏で開き、待たない。`TORIAGE_OPEN=0` なら開かない(0013)。終わり方は 0 が送ったか inbox に保存した、1 が理由を出して失敗、2 が使い方の誤り。`gh`、`jq`、`curl` が要る。送り先は `TORIAGE_URL` で変えられ、そのときは起動しない
+- `bin/toriage-report`: スキル `report` で Claude Code か Codex が呼ぶ送信スクリプト(Claude Code ではプラグインが有効なあいだ Bash の PATH に入る。Codex は入れないので、スキルが `SKILL.md` から見た場所で呼ぶ)。判断材料(標準入力の JSON)に `gh pr view` の数字と、会話の ID と実行した場所から作る `session` を足し、`server.py --check`(サーバーと同じ `parse_body` の検証)を通してから送る。つながらなければ `toriage-start` で起動して送り直し、届かなかったと分かるとき(curl の 6、7)だけ inbox に保存する(0006、0008)。保存したと答えたら、送り先の URL を `open`(macOS)か `xdg-open`(`DISPLAY` か `WAYLAND_DISPLAY` があるときだけ)で、`nohup` を付けて裏で開き、待たない。`TORIAGE_OPEN=0` なら開かない(0013)。終わり方は 0 が送ったか inbox に保存した、1 が理由を出して失敗、2 が使い方の誤り。`gh`、`jq`、`curl` が要る。送り先は `TORIAGE_URL` で変えられ、そのときは起動しない。会話の ID は、`CLAUDE_CODE_SESSION_ID` だけなら `agent: claude`、`CODEX_THREAD_ID` だけなら `agent: codex` で付け、両方あれば付けない(0014)
 - `bin/toriage-start`: サーバーを `nohup` で裏に起動し、最大 10 秒つながるまで待つ。作業ディレクトリはデータの置き場所にし、`GH_TOKEN` と `GITHUB_TOKEN` は渡さない(0008)。起動できなければ `server.log` の場所を出して 1 で終わる。`--restart` は 8787 番で答えているサーバーに `POST /api/shutdown` で止まってもらい(置き場所や版によらない)、止まらなければ 1 で終わる(0010)。`server.pid` は番号を知るためだけに残す。SessionStart のフック(`hooks/hooks.json`、待ち時間はフックの 15 秒より短くする)、スキル `open`、送信スクリプトが呼ぶ
 - `libexec/toriage-python`: 3.13 以上の `python3`、なければ uv の Python 3.13 で実行する
 - `libexec/toriage-home`: データの置き場所を出す。`server.py` の `data_home()` と同じ決まりで、テストで一致を確かめている
 - `skills/report`、`skills/open`: `/toriage:report`(判断材料の書き方と送り方)、`/toriage:open`(起動して開く。人が呼ぶときだけ)
 - `.claude-plugin/`: `plugin.json` と `marketplace.json`(同じリポジトリを marketplace `h11roki` にする)
-- データ: `TORIAGE_HOME`、なければ `${XDG_DATA_HOME:-~/.local/share}/toriage`(どちらも相対パスなら使わない)。`prs.db`(消せばリセット)、`inbox/`(起動時に取り込む。取り込めたものと保存済みより古いものは消し、読めないものは残す)、`server.log`、`server.pid`(待ち受けを始めたサーバーが自分で書く)、`returns/<セッション ID>.log`(差し戻しで裏で再開した Claude の出力)
+- データ: `TORIAGE_HOME`、なければ `${XDG_DATA_HOME:-~/.local/share}/toriage`(どちらも相対パスなら使わない)。`prs.db`(消せばリセット)、`inbox/`(起動時に取り込む。取り込めたものと保存済みより古いものは消し、読めないものは残す)、`server.log`、`server.pid`(待ち受けを始めたサーバーが自分で書く)、`returns/<会話の ID>.log`(差し戻しで裏で再開した Claude Code か Codex の出力)
 - `docs/images/`: README のスクショ(架空の `acme` のリポジトリで撮る)と構成図。構成図は [stack-diagram](https://github.com/caru-ini/stack-diagram) で描いた `architecture.html` を、明るい見た目と暗い見た目の PNG に撮ったもの(図は Mermaid という決まりの例外。高橋さんの依頼)。描き直すときは HTML を直して撮り直す
 
 ## 決まっていること(詳細は ADR)
@@ -34,6 +34,7 @@ Claude Code が作った PR の判断材料を受け取り、手元のブラウ�
 - 差し戻しは PR にコメントせず、報告の `session` の `workdir` で `claude -p --resume <id> --permission-mode auto --permission-prompts none` を裏で起動して理由を渡す。起動できなければ状態を変えない。`session` のない報告には差し戻しを出さない。差し戻しのカードには、やり直し用に差し戻しだけを出す。同じセッションの再開が動いているあいだ(`returns/<id>.pid` のプロセスが生きているあいだ)は断る(0011)
 - 裏で再開する `claude` に渡す PATH から、toriage のプラグインの `bin`(`toriage-report` があり、親に `.claude-plugin/plugin.json` がある)を外す。サーバーが起動したときの古い版の `bin` が先に見つからないようにし、Claude Code が足す今の版を使わせる(0012)
 - 送信スクリプトは、報告が保存されたらダッシュボードをブラウザで開く。開くたびに新しいタブになる。`TORIAGE_OPEN=0` で止める。inbox に保存したときと、置き換えなかったときは開かない(0013)。inbox から取り込んだ報告では開かない
+- Codex でも使う。Codex は `.claude-plugin` のマーケットプレイスとプラグインをそのまま読む。報告の `session.agent`(無ければ `claude`)が `codex` なら、差し戻しは `<codex> exec resume -c sandbox_mode="workspace-write" -c approval_policy="on-request" -c approvals_reviewer="auto_review" <ID> <指示>` で裏で再開する。`codex` は `TORIAGE_CODEX`、PATH、ChatGPT アプリと Codex アプリの中の順に探し、無ければ断る。裏で再開するエージェントには、Claude Code と Codex の両方の会話の環境変数を渡さない。スキルは、`bin` のコマンドが見つからなければ `SKILL.md` から見た `../../bin/` を使う(0014)
 - Claude Code のプラグインとして配り、SessionStart のフックと送信スクリプトがサーバーを起動する。データはプラグインの外に置く(0008)
 - 名前は toriage(小文字)。リポジトリ、ディレクトリ、プラグイン、コマンド、データの場所、環境変数をそろえる。0001〜0008 の古い名前はこれで読み替える(0009)
 - 起動し直すときは、8787 番で答えているサーバーに `POST /api/shutdown` で自分で止まってもらう(0010)

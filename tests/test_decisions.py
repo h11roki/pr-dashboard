@@ -136,7 +136,7 @@ def test_returning_a_pr_hands_the_reason_to_the_session_that_made_it(
     assert session == SESSION
     assert "https://github.com/acme/web/pull/128" in prompt
     assert "テストが足りない" in prompt
-    assert "/toriage:report" in prompt
+    assert "toriage:report" in prompt
     returned = store.find(triage.id)
     assert returned is not None
     assert (returned.status, returned.note) == ("returned", "テストが足りない")

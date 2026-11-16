@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -50,14 +51,33 @@ INHERITED_SESSION_VARIABLES = frozenset(
         "CLAUDE_PLUGIN_DATA",
         "CLAUDE_PLUGIN_ROOT",
         "CLAUDE_PROJECT_DIR",
+        "CODEX_SANDBOX",
+        "CODEX_SANDBOX_NETWORK_DISABLED",
+        "CODEX_SESSION_ID",
+        "CODEX_THREAD_ID",
+        "CODEX_TOOL_CALL_ID",
+        "PLUGIN_DATA",
+        "PLUGIN_ROOT",
     }
+)
+CODEX_LOCATIONS = (
+    Path("/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"),
+    Path("/Applications/Codex.app/Contents/Resources/codex"),
+)
+CODEX_RESUME_SETTINGS = (
+    "-c",
+    'sandbox_mode="workspace-write"',
+    "-c",
+    'approval_policy="on-request"',
+    "-c",
+    'approvals_reviewer="auto_review"',
 )
 RETURN_PROMPT = """toriage で {url} が差し戻されました。
 
 理由:
 {reason}
 
-この PR を直して push し、/toriage:report で判断材料を送り直してください。"""
+この PR を直して push し、スキル toriage:report で判断材料を送り直してください。"""
 CONTENT_SECURITY_POLICY = "; ".join(
     [
         "default-src 'none'",
@@ -120,6 +140,14 @@ class Action(StrEnum):
     REQUEST_REVIEW = "request-review"
     RETURN = "return"
     HOLD = "hold"
+
+
+class Agent(StrEnum):
+    CLAUDE = "claude"
+    CODEX = "codex"
+
+
+AGENT_NAMES = {Agent.CLAUDE: "Claude Code", Agent.CODEX: "Codex"}
 
 
 ALLOWED_ACTIONS: dict[str, tuple[Action, ...]] = {
@@ -194,6 +222,7 @@ class TestResult:
 class Session:
     id: str
     workdir: str
+    agent: Agent = Agent.CLAUDE
 
 
 ResumeSession = Callable[[Session, str], None]
@@ -281,11 +310,14 @@ def _session_or_none(value: object) -> Session | None:
     if not isinstance(value, dict):
         return None
     session_id, workdir = value.get("id"), value.get("workdir")
+    agent = value.get("agent", Agent.CLAUDE)
     if not isinstance(session_id, str) or not SESSION_ID_PATTERN.fullmatch(session_id):
         return None
     if not isinstance(workdir, str) or not Path(workdir).is_absolute() or "\0" in workdir:
         return None
-    return Session(id=session_id, workdir=workdir)
+    if not isinstance(agent, str) or agent not in Agent:
+        return None
+    return Session(id=session_id, workdir=workdir, agent=Agent(agent))
 
 
 def pull_request_url(repo: str, number: int) -> str:
@@ -459,6 +491,7 @@ def resume_in_background(logs: Path) -> ResumeSession:
         if not Path(session.workdir).is_dir():
             raise ResumeFailed(f"PR を作った場所 {session.workdir} がもうない")
         environment = _resume_environment(session.workdir)
+        command = _resume_command(session, prompt, environment)
         log = logs / f"{session.id}.log"
         marker = logs / f"{session.id}.pid"
         with lock:
@@ -470,17 +503,7 @@ def resume_in_background(logs: Path) -> ResumeSession:
                     output.write(f"{_now()} に差し戻した\n")
                     output.flush()
                     process = subprocess.Popen(
-                        [
-                            "claude",
-                            "-p",
-                            "--resume",
-                            session.id,
-                            "--permission-mode",
-                            "auto",
-                            "--permission-prompts",
-                            "none",
-                            prompt,
-                        ],
+                        command,
                         cwd=session.workdir,
                         env=environment,
                         stdin=subprocess.DEVNULL,
@@ -489,7 +512,9 @@ def resume_in_background(logs: Path) -> ResumeSession:
                         start_new_session=True,
                     )
             except OSError as error:
-                raise ResumeFailed(f"Claude Code を起動できなかった: {error}") from error
+                raise ResumeFailed(
+                    f"{AGENT_NAMES[session.agent]} を起動できなかった: {error}"
+                ) from error
             try:
                 marker.write_text(f"{process.pid}\n", encoding="utf-8")
             except OSError as error:
@@ -514,6 +539,40 @@ def _resume_environment(workdir: str) -> dict[str, str]:
     return environment
 
 
+def _resume_command(session: Session, prompt: str, environment: dict[str, str]) -> list[str]:
+    match session.agent:
+        case Agent.CLAUDE:
+            return [
+                "claude",
+                "-p",
+                "--resume",
+                session.id,
+                "--permission-mode",
+                "auto",
+                "--permission-prompts",
+                "none",
+                prompt,
+            ]
+        case Agent.CODEX:
+            codex = _find_codex(environment)
+            return [codex, "exec", "resume", *CODEX_RESUME_SETTINGS, session.id, prompt]
+        case _:
+            assert_never(session.agent)
+
+
+def _find_codex(environment: dict[str, str]) -> str:
+    configured = environment.get("TORIAGE_CODEX")
+    if configured:
+        return configured
+    found = shutil.which("codex", path=environment.get("PATH"))
+    if found:
+        return found
+    for location in CODEX_LOCATIONS:
+        if os.access(location, os.X_OK):
+            return str(location)
+    raise ResumeFailed("codex が見つからない。TORIAGE_CODEX に codex の場所を設定する")
+
+
 def _is_plugin_bin(directory: Path) -> bool:
     resolved = directory.resolve()
     return (resolved / REPORT_COMMAND).is_file() and (resolved.parent / PLUGIN_MANIFEST).is_file()
@@ -530,7 +589,7 @@ def _still_resuming(marker: Path, session: Session) -> bool:
         ).stdout
     except (OSError, ValueError):
         return False
-    return f"--resume {session.id}" in command
+    return session.id in command.split()
 
 
 def _now() -> str:

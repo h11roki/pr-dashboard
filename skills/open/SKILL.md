@@ -7,7 +7,7 @@ allowed-tools: Bash(toriage-start), Bash(toriage-start *), Bash(open http://127.
 
 # ダッシュボードを開く
 
-1. `toriage-start` を実行する。動いていなければ裏で起動してつながるまで待ち、動いていれば何もしない
+1. `toriage-start` を実行する。動いていなければ裏で起動してつながるまで待ち、動いていれば何もしない。見つからないとき(Codex)は、この `SKILL.md` があるフォルダから見て `../../bin/toriage-start` を実行する。Codex のサンドボックスの中では、外で実行する許可を求める
 2. 1 が失敗したら、出た理由と記録の場所をそのまま伝えて終わる
 3. macOS なら `open http://127.0.0.1:8787`、Linux なら `xdg-open http://127.0.0.1:8787` で開く。開けなかったときは、http://127.0.0.1:8787 をブラウザで開くよう伝える
 
