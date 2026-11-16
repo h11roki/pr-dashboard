@@ -1,12 +1,15 @@
 import json
 import os
 import subprocess
+import sys
+import time
 from contextlib import closing
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from server import HOST, ROOT, Session, TriageStore
+from server import HOST, ROOT, Session, TriageStore, parse_report
 
 SCRIPT = ROOT / "bin" / "toriage-report"
 REFUSED = f"http://{HOST}:1"
@@ -23,18 +26,34 @@ GH_PR_VIEW = {
 }
 
 
-def write_gh(tmp_path: Path, body: str) -> Path:
+OPENERS = ("open", "xdg-open")
+
+
+def write_commands(tmp_path: Path, gh_body: str) -> Path:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    gh = bin_dir / "gh"
-    gh.write_text(f"#!/usr/bin/env bash\n{body}\n", encoding="utf-8")
-    gh.chmod(0o755)
+    opener_body = f'echo "$1" >> "{tmp_path / "opened"}"'
+    commands = {"gh": gh_body} | dict.fromkeys(OPENERS, opener_body)
+    for name, body in commands.items():
+        command = bin_dir / name
+        command.write_text(f"#!/usr/bin/env bash\n{body}\n", encoding="utf-8")
+        command.chmod(0o755)
     return bin_dir
+
+
+def opened_urls(tmp_path: Path, seconds: float) -> list[str]:
+    record = tmp_path / "opened"
+    deadline = time.monotonic() + seconds
+    while True:
+        text = record.read_text(encoding="utf-8") if record.exists() else ""
+        if text.endswith("\n") or time.monotonic() >= deadline:
+            return text.splitlines()
+        time.sleep(0.05)
 
 
 @pytest.fixture
 def fake_gh(tmp_path: Path) -> Path:
-    return write_gh(tmp_path, f"echo '{json.dumps(GH_PR_VIEW, ensure_ascii=False)}'")
+    return write_commands(tmp_path, f"echo '{json.dumps(GH_PR_VIEW, ensure_ascii=False)}'")
 
 
 def judgment_of(report: dict[str, object]) -> dict[str, object]:
@@ -49,12 +68,20 @@ def run_script(
     *args: str,
     session_id: str | None = None,
     cwd: Path | None = None,
+    open_setting: str | None = "0",
+    display: str | None = ":0",
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ | {
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "TORIAGE_HOME": str(home),
     }
-    for name, value in (("TORIAGE_URL", dashboard), ("CLAUDE_CODE_SESSION_ID", session_id)):
+    for name, value in (
+        ("TORIAGE_URL", dashboard),
+        ("CLAUDE_CODE_SESSION_ID", session_id),
+        ("TORIAGE_OPEN", open_setting),
+        ("DISPLAY", display),
+        ("WAYLAND_DISPLAY", None),
+    ):
         environment.pop(name, None)
         if value is not None:
             environment[name] = value
@@ -162,6 +189,80 @@ def test_does_not_take_the_session_from_the_judgment(
     assert triage.session is None
 
 
+def test_opens_the_dashboard_after_sending(
+    tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
+) -> None:
+    judgment = json.dumps(judgment_of(report))
+
+    result = run_script(
+        fake_gh, judgment, f"http://{HOST}:{port}/", tmp_path / "home", "128", open_setting=None
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert opened_urls(tmp_path, 5) == [f"http://{HOST}:{port}"]
+
+
+def test_does_not_open_the_dashboard_when_opening_is_turned_off(
+    tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
+) -> None:
+    judgment = json.dumps(judgment_of(report))
+
+    result = run_script(
+        fake_gh, judgment, f"http://{HOST}:{port}", tmp_path / "home", "128", open_setting="0"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert len(store.list_triages()) == 1
+    assert opened_urls(tmp_path, 1) == []
+
+
+def test_does_not_open_the_dashboard_when_the_report_waits_in_the_inbox(
+    tmp_path: Path, report: dict[str, object], fake_gh: Path
+) -> None:
+    judgment = json.dumps(judgment_of(report))
+
+    result = run_script(fake_gh, judgment, REFUSED, tmp_path / "home", "128", open_setting=None)
+
+    assert result.returncode == 0, result.stderr
+    assert opened_urls(tmp_path, 1) == []
+
+
+def test_does_not_open_the_dashboard_when_a_newer_report_is_kept(
+    tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
+) -> None:
+    store.save(parse_report(report), datetime.now(UTC) + timedelta(days=1))
+    judgment = json.dumps(judgment_of(report))
+
+    result = run_script(
+        fake_gh, judgment, f"http://{HOST}:{port}", tmp_path / "home", "128", open_setting=None
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "置き換えなかった" in result.stderr
+    assert opened_urls(tmp_path, 1) == []
+
+
+@pytest.mark.skipif(sys.platform == "darwin", reason="macOS は画面の有無によらず open で開く")
+def test_does_not_open_the_dashboard_without_a_display(
+    tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
+) -> None:
+    judgment = json.dumps(judgment_of(report))
+
+    result = run_script(
+        fake_gh,
+        judgment,
+        f"http://{HOST}:{port}",
+        tmp_path / "home",
+        "128",
+        open_setting=None,
+        display=None,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert len(store.list_triages()) == 1
+    assert opened_urls(tmp_path, 1) == []
+
+
 def test_keeps_the_report_in_the_inbox_when_the_dashboard_is_down(
     tmp_path: Path, report: dict[str, object], fake_gh: Path
 ) -> None:
@@ -237,7 +338,7 @@ def test_fails_when_the_judgment_is_not_one_json_object(
 
 
 def test_fails_when_gh_cannot_read_the_pr(tmp_path: Path, report: dict[str, object]) -> None:
-    failing_gh = write_gh(tmp_path, "exit 1")
+    failing_gh = write_commands(tmp_path, "exit 1")
     judgment = json.dumps(judgment_of(report))
 
     result = run_script(failing_gh, judgment, "http://unused", tmp_path / "home", "9")
