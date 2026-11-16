@@ -591,7 +591,7 @@ def _still_resuming(marker: Path, command: list[str]) -> bool:
     try:
         pid = int(marker.read_text(encoding="utf-8"))
         running = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "command="],
+            ["ps", "-ww", "-p", str(pid), "-o", "command="],
             capture_output=True,
             text=True,
             check=False,

@@ -320,6 +320,26 @@ def test_does_not_resume_a_session_that_is_still_running(
     wait_until(lambda: log_of(logs).count("終了コード") == 2)
 
 
+@pytest.mark.parametrize("agent", list(Agent))
+def test_sees_a_running_resume_even_when_columns_is_narrow(
+    tmp_path: Path,
+    fake_agent: FakeAgent,
+    workdir: Path,
+    agent: Agent,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("COLUMNS", "40")
+    resume = resume_in_background(tmp_path / "returns")
+    session = Session(id=SESSION_ID, workdir=str(workdir), agent=agent)
+    resume(session, "直してください")
+    fake_agent.call()
+
+    with pytest.raises(SessionBusy, match="まだ直している"):
+        resume(session, "もう一度")
+
+    fake_agent.finish()
+
+
 SLEEPER = [sys.executable, "-c", "import time; time.sleep(30)"]
 
 
