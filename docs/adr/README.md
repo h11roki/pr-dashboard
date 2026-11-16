@@ -51,7 +51,8 @@
 | [0010](0010-server-stops-itself.md) | 起動し直すときは、サーバーに自分で止まってもらう | 承認 |
 | [0011](0011-return-to-the-session.md) | 差し戻しは、PR を出した Claude のセッションを裏で再開して理由を渡す | 承認 |
 | [0012](0012-resume-with-the-current-report-command.md) | 裏で再開する Claude には、サーバーが持つ toriage の bin を PATH から外して渡す | 承認 |
-| [0013](0013-open-the-dashboard-after-reporting.md) | 送信スクリプトは、報告がダッシュボードに届いたらブラウザで開く | 承認 |
+| [0013](0013-open-the-dashboard-after-reporting.md) | 送信スクリプトは、報告がダッシュボードに届いたらブラウザで開く | 廃止(Superseded by 0017) |
 | [0014](0014-support-codex.md) | Codex でも使えるようにし、差し戻しは PR を作ったエージェントの会話を裏で再開する | 承認 |
 | [0015](0015-thread-view.md) | 画面を、左に PR の一覧、右に選んだ PR の中身を出す 2 ペインにする | 承認 |
 | [0016](0016-move-closed-prs.md) | マージや close をした PR は、画面を開いたときに GitHub で確かめて「済み」に移す | 承認 |
+| [0017](0017-notify-instead-of-opening.md) | 報告が届いたら、ページを開かずに OS の通知で知らせる | 承認 |
