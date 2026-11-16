@@ -804,8 +804,7 @@
       ".thread-meta",
       [
         groupByProject ? `#${report.number}` : `${report.repo} #${report.number}`,
-        triage.closed ? CLOSED[triage.closed].label : risk.label,
-        ageOf(triage.received_at),
+        ...(triage.closed ? [CLOSED[triage.closed].label] : [risk.label, ageOf(triage.received_at)]),
       ].join(" · "),
     );
     return thread;

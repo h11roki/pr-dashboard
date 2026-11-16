@@ -125,7 +125,7 @@ UPDATE prs SET closed = ? WHERE id = ? AND received_at = ? AND closed IS NULL
 """
 
 SELECT_DECISION_STATE = """
-SELECT status, closed, received_at FROM prs WHERE id = ?
+SELECT status, received_at FROM prs WHERE id = ?
 """
 
 UPDATE_DECISION = """
@@ -175,6 +175,10 @@ class InvalidReason(DecisionError):
 
 class GhFailed(DecisionError):
     status = HTTPStatus.BAD_GATEWAY
+
+
+class GhTimedOut(GhFailed):
+    pass
 
 
 class ResumeFailed(DecisionError):
@@ -427,7 +431,7 @@ class TriageStore:
         decided = decided_at.astimezone(UTC).isoformat(timespec="milliseconds")
         with self._lock, self._connection:
             row = self._connection.execute(SELECT_DECISION_STATE, (triage.id,)).fetchone()
-            if row is None or row["status"] != triage.status or row["closed"] is not None:
+            if row is None or row["status"] != triage.status:
                 return False, False
             self._connection.execute(UPDATE_DECISION, (status, note, decided, triage.id))
         return True, row["received_at"] != triage.received_at
@@ -488,23 +492,33 @@ def _gh(arguments: list[str], stdin: str) -> subprocess.CompletedProcess[str]:
             check=False,
         )
     except subprocess.TimeoutExpired as error:
-        raise GhFailed(
-            f"gh が {GH_TIMEOUT_SECONDS} 秒で終わらなかった。どうなったかは GitHub で確かめる"
-        ) from error
+        raise GhTimedOut(f"gh が {GH_TIMEOUT_SECONDS} 秒で終わらなかった") from error
     except OSError as error:
         raise GhFailed(f"gh を実行できなかった: {error}") from error
 
 
 def run_gh(arguments: list[str], stdin: str) -> None:
-    completed = _gh(arguments, stdin)
+    try:
+        completed = _gh(arguments, stdin)
+    except GhTimedOut as error:
+        raise GhFailed(f"{error}。どうなったかは GitHub で確かめる") from error
     if completed.returncode != 0:
         raise GhFailed(completed.stderr.strip() or f"gh が {completed.returncode} で終わった")
 
 
 def pull_request_states(pull_requests: list[tuple[str, int]]) -> dict[tuple[str, int], str]:
     states = {}
-    for start in range(0, len(pull_requests), STATES_PER_QUERY):
-        states.update(_query_states(pull_requests[start : start + STATES_PER_QUERY]))
+    failures = []
+    starts = range(0, len(pull_requests), STATES_PER_QUERY)
+    for start in starts:
+        try:
+            states.update(_query_states(pull_requests[start : start + STATES_PER_QUERY]))
+        except GhFailed as error:
+            failures.append(error)
+    if failures and len(failures) == len(starts):
+        raise failures[0]
+    for failure in failures:
+        print(f"{_now()} PR の状態を一部確かめられなかった: {failure}", file=sys.stderr)
     return states
 
 

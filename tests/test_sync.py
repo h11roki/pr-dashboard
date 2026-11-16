@@ -230,7 +230,7 @@ def test_does_not_close_a_pr_reported_again_while_github_was_asked(
     assert by_number(store) == {128: ("pending", None, 2)}
 
 
-def test_does_not_record_a_decision_on_a_pr_that_closed_meanwhile(
+def test_keeps_a_decision_already_carried_out_when_the_pr_closed_meanwhile(
     store: TriageStore, report: dict[str, object]
 ) -> None:
     save(store, report, 128)
@@ -238,8 +238,8 @@ def test_does_not_record_a_decision_on_a_pr_that_closed_meanwhile(
     [open_pr] = store.open_pull_requests()
     store.mark_closed({open_pr: "merged"})
 
-    assert store.decide(seen, "on_hold", None, MORNING) == (False, False)
-    assert by_number(store) == {128: ("pending", "merged", 0)}
+    assert store.decide(seen, "on_hold", None, MORNING) == (True, False)
+    assert by_number(store) == {128: ("on_hold", "merged", 0)}
 
 
 def test_fails_when_github_returns_no_states_at_all(
@@ -266,3 +266,25 @@ def test_splits_many_prs_into_several_queries(
     assert states == {("acme/web", 1): "MERGED", ("acme/web", 3): "MERGED"}
     calls = (tmp_path / "arguments").read_text(encoding="utf-8").count("graphql")
     assert calls == 2
+
+
+def test_keeps_the_states_read_when_one_of_several_queries_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text(
+        "#!/usr/bin/env bash\n"
+        "if printf '%s' \"$*\" | grep -q broken; then echo 'rate limited' >&2; exit 1; fi\n"
+        'echo \'{"data": {"p0": {"pullRequest": {"state": "MERGED"}}}}\'\n',
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}/usr/bin:/bin")
+    monkeypatch.setattr(server, "STATES_PER_QUERY", 1)
+
+    states = pull_request_states([("acme/web", 1), ("acme/broken", 2)])
+
+    assert states == {("acme/web", 1): "MERGED"}
+    assert "rate limited" in capsys.readouterr().err
