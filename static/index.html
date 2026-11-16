@@ -258,7 +258,6 @@
     box-shadow: var(--shadow-sm);
   }
   .detail-slot { display: flex; flex: 1; flex-direction: column; }
-  .placeholder { margin: auto; padding: 48px 24px; color: var(--muted-foreground); text-align: center; }
   .detail {
     display: flex;
     flex: 1;
@@ -279,12 +278,14 @@
   .detail-actions {
     position: sticky;
     bottom: 0;
+    z-index: 1;
     display: grid;
     gap: 12px;
     padding: 12px 0 16px;
     border-top: 1px solid var(--border);
     background: var(--background);
   }
+  .detail-actions:has(.decision:not([hidden])) { position: static; }
   .detail-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
   .actions, .links { display: flex; flex-wrap: wrap; gap: 8px; }
   .links { margin-left: auto; }
@@ -406,7 +407,6 @@
     .sidebar { min-height: 100vh; min-height: 100dvh; }
     .app[data-view="list"] .main,
     .app[data-view="detail"] .sidebar { display: none; }
-    .app[data-view="list"] .thread[aria-current]:not(:hover) { background: none; }
     .detail { padding: 16px 16px 0; }
     .actions, .links { width: 100%; }
     .detail-footer .button { flex: 1; justify-content: center; }
@@ -461,10 +461,10 @@
 </template>
 <template id="detail-template">
   <article class="detail">
-    <a class="button ghost back" href="#">
+    <button type="button" class="button ghost back">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
       一覧に戻る
-    </a>
+    </button>
     <header class="detail-header">
       <p class="detail-repo"><span class="repo-name"></span> <span class="number"></span></p>
       <h2 class="detail-title title"></h2>
@@ -562,10 +562,13 @@
   const threadTemplate = document.getElementById("thread-template");
   const detailTemplate = document.getElementById("detail-template");
   const groupSwitch = document.getElementById("group-by-project");
+  const wide = window.matchMedia("(min-width: 768px)");
   const GROUPING_KEY = "toriage:group-by-project";
   let selectedStatus = "pending";
   let selectedId = null;
   let shownId = null;
+  let openedFromList = false;
+  let listScroll = 0;
   let followSelectionOnLoad = true;
   let triages = [];
   let latestRequest = 0;
@@ -611,6 +614,15 @@
     const selected = triages.find((triage) => triage.id === selectedId);
     if (selected) {
       selectedStatus = selected.status;
+    } else if (selectedId !== null) {
+      selectQuietly(null);
+    }
+  }
+
+  function dropMovedSelection() {
+    const selected = triages.find((triage) => triage.id === selectedId);
+    if (selectedId !== null && selected?.status !== selectedStatus) {
+      selectQuietly(null);
     }
   }
 
@@ -626,6 +638,12 @@
   function orderedIn(status) {
     const shown = shownIn(status);
     return groupByProject ? shown.sort((a, b) => a.report.repo.localeCompare(b.report.repo)) : shown;
+  }
+
+  function visibleIn(status) {
+    return orderedIn(status).filter(
+      (triage) => !groupByProject || !collapsedProjects.has(projectKey(status, triage.report.repo)),
+    );
   }
 
   function readGrouping() {
@@ -699,13 +717,13 @@
     return ageFormat.format(-Math.round(hours / 24), "day");
   }
 
-  function renderThread(triage, current) {
+  function renderThread(triage, highlighted) {
     const thread = threadTemplate.content.firstElementChild.cloneNode(true);
     const { report } = triage;
     const risk = RISKS[report.risk];
     thread.href = `#pr-${triage.id}`;
     thread.dataset.tone = risk.tone;
-    if (triage === current) {
+    if (triage === highlighted) {
       thread.setAttribute("aria-current", "page");
     }
     setText(thread, ".thread-title", report.title);
@@ -720,14 +738,24 @@
   function renderGroup(repo, rows, key) {
     const group = groupTemplate.content.firstElementChild.cloneNode(true);
     const slash = repo.indexOf("/");
+    const summary = group.querySelector(".group-header");
     group.open = !collapsedProjects.has(key);
     group.addEventListener("toggle", () => {
+      if (group.open !== collapsedProjects.has(key)) {
+        return;
+      }
       if (group.open) {
         collapsedProjects.delete(key);
       } else {
         collapsedProjects.add(key);
       }
+      const focused = document.activeElement === summary;
+      render();
+      if (focused) {
+        [...threads.querySelectorAll(".group")].find((shown) => shown.dataset.key === key)?.querySelector(".group-header").focus();
+      }
     });
+    group.dataset.key = key;
     setText(group, ".group-owner", repo.slice(0, slash + 1));
     setText(group, ".group-name", repo.slice(slash + 1));
     setText(group, ".group-count", rows.length);
@@ -735,20 +763,19 @@
     return group;
   }
 
-  function renderGroups(shown, current) {
+  function renderGroups(ordered, highlighted) {
     const projects = new Map();
-    for (const triage of shown) {
+    for (const triage of ordered) {
       const repo = triage.report.repo;
       if (!projects.has(repo)) {
         projects.set(repo, []);
       }
       projects.get(repo).push(triage);
     }
-    const repos = [...projects.keys()].sort((a, b) => a.localeCompare(b));
-    return repos.map((repo) =>
+    return [...projects].map(([repo, members]) =>
       renderGroup(
         repo,
-        projects.get(repo).map((triage) => renderThread(triage, current)),
+        members.map((triage) => renderThread(triage, highlighted)),
         projectKey(selectedStatus, repo),
       ),
     );
@@ -759,6 +786,14 @@
     const { report } = triage;
     const { changes } = report;
     detail.dataset.id = triage.id;
+    detail.querySelector(".back").addEventListener("click", () => {
+      if (openedFromList) {
+        history.back();
+        return;
+      }
+      selectQuietly(null);
+      render();
+    });
     setText(detail, ".repo-name", report.repo);
     setText(detail, ".number", `#${report.number}`);
     setText(detail, ".title", report.title);
@@ -801,7 +836,7 @@
   async function decideOn(triage) {
     const draft = drafts.get(triage.id);
     const status = selectedStatus;
-    const position = orderedIn(status).findIndex((shown) => shown.id === triage.id);
+    const position = Math.max(0, visibleIn(status).findIndex((shown) => shown.id === triage.id));
     draft.error = "";
     runningDecisions.add(triage.id);
     render();
@@ -817,7 +852,7 @@
       runningDecisions.delete(triage.id);
     }
     await refresh();
-    const remaining = orderedIn(status);
+    const remaining = visibleIn(status);
     const stayed = remaining.some((shown) => shown.id === triage.id);
     if (!stayed && status === selectedStatus && (selectedId === triage.id || selectedId === null)) {
       selectQuietly(remaining[Math.min(position, remaining.length - 1)]?.id ?? null);
@@ -901,32 +936,29 @@
     }
     const shown = orderedIn(selectedStatus);
     const chosen = shown.find((triage) => triage.id === selectedId) ?? null;
-    const current =
-      chosen ??
-      shown.find(
-        (triage) =>
-          !groupByProject || !collapsedProjects.has(projectKey(selectedStatus, triage.report.repo)),
-      ) ??
-      shown[0] ??
-      null;
-    app.dataset.view = chosen ? "detail" : "list";
+    const current = chosen ?? visibleIn(selectedStatus)[0] ?? shown[0] ?? null;
+    const highlighted = chosen || wide.matches ? current : null;
+    const view = chosen ? "detail" : "list";
+    const viewChanged = app.dataset.view !== view;
+    const currentChanged = current?.id !== shownId;
+    app.dataset.view = view;
+    if (view === "list") {
+      openedFromList = false;
+    }
     threads.className = groupByProject ? "thread-list grouped" : "thread-list";
     threads.replaceChildren(
       ...(groupByProject
-        ? renderGroups(shown, current)
-        : shown.map((triage) => renderThread(triage, current))),
+        ? renderGroups(shown, highlighted)
+        : shown.map((triage) => renderThread(triage, highlighted))),
     );
-    detailSlot.replaceChildren(
-      current
-        ? renderDetail(current)
-        : Object.assign(document.createElement("p"), {
-            className: "placeholder",
-            textContent: loadError ? "" : "このタブに PR はありません",
-          }),
-    );
-    if (current?.id !== shownId) {
-      shownId = current?.id;
+    detailSlot.replaceChildren(...(current ? [renderDetail(current)] : []));
+    shownId = current?.id;
+    if (currentChanged) {
       main.scrollTop = 0;
+    }
+    if (viewChanged && view === "list") {
+      window.scrollTo(0, listScroll);
+    } else if (view === "detail" && (viewChanged || currentChanged)) {
       window.scrollTo(0, 0);
     }
     const reason = typing && detailSlot.querySelector(`.detail[data-id="${typing.id}"] .reason`);
@@ -961,6 +993,7 @@
         followSelectionOnLoad = false;
         followSelection();
       }
+      dropMovedSelection();
       render();
     } catch (error) {
       if (request !== latestRequest) {
@@ -990,6 +1023,13 @@
       render();
     }
   });
+  threads.addEventListener("click", (event) => {
+    if (event.target.closest(".thread")) {
+      openedFromList = true;
+      listScroll = window.scrollY;
+    }
+  });
+  wide.addEventListener("change", render);
   window.addEventListener("hashchange", () => {
     followSelection();
     render();
