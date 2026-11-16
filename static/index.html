@@ -171,12 +171,14 @@
     color: var(--muted-foreground);
     text-align: center;
   }
-  .message[data-kind="error"] {
-    padding: 12px 16px;
-    border: 1px solid var(--border);
+  .load-error {
+    margin: 12px 16px 0;
+    padding: 8px 16px;
+    border: 1px solid var(--destructive);
     border-radius: var(--radius);
-    background: var(--card);
+    background: color-mix(in oklch, var(--destructive) 8%, var(--background));
     color: var(--destructive);
+    box-shadow: var(--shadow-sm);
   }
 
   .thread-list { display: grid; align-content: start; gap: 2px; padding: 8px; }
@@ -398,12 +400,19 @@
   }
   @media (min-width: 768px) {
     body { height: 100vh; height: 100dvh; overflow: hidden; }
-    .app { display: grid; grid-template-columns: 360px minmax(0, 1fr); height: 100%; }
+    .app {
+      display: grid;
+      grid-template-columns: 360px minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr);
+      height: 100%;
+    }
+    .load-error { grid-column: 1 / -1; margin-bottom: 12px; }
+    .sidebar, .main { grid-row: 2; }
     .sidebar { min-height: 0; overflow-y: auto; border-right: 1px solid var(--border); }
     .main { min-height: 0; overflow-y: auto; }
     .back { display: none; }
   }
-  @media (max-width: 767px) {
+  @media not all and (min-width: 768px) {
     .sidebar { min-height: 100vh; min-height: 100dvh; }
     .app[data-view="list"] .main,
     .app[data-view="detail"] .sidebar { display: none; }
@@ -417,6 +426,7 @@
 </head>
 <body>
 <div class="app" data-view="list">
+  <p id="load-error" class="load-error" role="alert" hidden></p>
   <aside class="sidebar">
     <div class="sidebar-header">
       <div class="brand">
@@ -558,6 +568,7 @@
   const detailSlot = document.getElementById("detail");
   const message = document.getElementById("message");
   const notices = document.getElementById("notices");
+  const loadErrorBox = document.getElementById("load-error");
   const groupTemplate = document.getElementById("group-template");
   const threadTemplate = document.getElementById("thread-template");
   const detailTemplate = document.getElementById("detail-template");
@@ -569,6 +580,7 @@
   let shownId = null;
   let openedFromList = false;
   let listScroll = 0;
+  let advance = null;
   let followSelectionOnLoad = true;
   let triages = [];
   let latestRequest = 0;
@@ -619,13 +631,6 @@
     }
   }
 
-  function dropMovedSelection() {
-    const selected = triages.find((triage) => triage.id === selectedId);
-    if (selectedId !== null && selected?.status !== selectedStatus) {
-      selectQuietly(null);
-    }
-  }
-
   function selectQuietly(id) {
     selectedId = id;
     history.replaceState(null, "", id === null ? `${location.pathname}${location.search}` : `#pr-${id}`);
@@ -640,10 +645,25 @@
     return groupByProject ? shown.sort((a, b) => a.report.repo.localeCompare(b.report.repo)) : shown;
   }
 
-  function visibleIn(status) {
-    return orderedIn(status).filter(
-      (triage) => !groupByProject || !collapsedProjects.has(projectKey(status, triage.report.repo)),
+  function hiddenIn(status, triage) {
+    return groupByProject && collapsedProjects.has(projectKey(status, triage.report.repo));
+  }
+
+  function moveOnFromDecided() {
+    const { id, status, following, preceding } = advance;
+    advance = null;
+    if (shownIn(status).some((shown) => shown.id === id)) {
+      return;
+    }
+    if (status !== selectedStatus || (selectedId !== id && selectedId !== null)) {
+      return;
+    }
+    const visible = new Set(
+      shownIn(status)
+        .filter((shown) => !hiddenIn(status, shown))
+        .map((shown) => shown.id),
     );
+    selectQuietly([...following, ...preceding].find((candidate) => visible.has(candidate)) ?? null);
   }
 
   function readGrouping() {
@@ -738,7 +758,6 @@
   function renderGroup(repo, rows, key) {
     const group = groupTemplate.content.firstElementChild.cloneNode(true);
     const slash = repo.indexOf("/");
-    const summary = group.querySelector(".group-header");
     group.open = !collapsedProjects.has(key);
     group.addEventListener("toggle", () => {
       if (group.open !== collapsedProjects.has(key)) {
@@ -749,11 +768,7 @@
       } else {
         collapsedProjects.add(key);
       }
-      const focused = document.activeElement === summary;
       render();
-      if (focused) {
-        [...threads.querySelectorAll(".group")].find((shown) => shown.dataset.key === key)?.querySelector(".group-header").focus();
-      }
     });
     group.dataset.key = key;
     setText(group, ".group-owner", repo.slice(0, slash + 1));
@@ -836,12 +851,19 @@
   async function decideOn(triage) {
     const draft = drafts.get(triage.id);
     const status = selectedStatus;
-    const position = Math.max(0, visibleIn(status).findIndex((shown) => shown.id === triage.id));
+    const order = orderedIn(status).map((shown) => shown.id);
+    const index = order.indexOf(triage.id);
     draft.error = "";
     runningDecisions.add(triage.id);
     render();
     try {
       const decision = await postDecision(triage, draft.action, draft.reason);
+      advance = {
+        id: triage.id,
+        status,
+        following: order.slice(index + 1),
+        preceding: order.slice(0, index).reverse(),
+      };
       drafts.delete(triage.id);
       if (decision.warning) {
         addNotice(triage, decision.warning);
@@ -852,11 +874,6 @@
       runningDecisions.delete(triage.id);
     }
     await refresh();
-    const remaining = visibleIn(status);
-    const stayed = remaining.some((shown) => shown.id === triage.id);
-    if (!stayed && status === selectedStatus && (selectedId === triage.id || selectedId === null)) {
-      selectQuietly(remaining[Math.min(position, remaining.length - 1)]?.id ?? null);
-    }
     if (draft.error && !drafts.has(triage.id)) {
       addNotice(triage, draft.error);
     }
@@ -922,7 +939,10 @@
   }
 
   function render() {
-    const typing = document.activeElement?.classList.contains("reason")
+    const focused = document.activeElement;
+    const focusedThread = focused?.classList.contains("thread") ? focused.getAttribute("href") : null;
+    const focusedGroup = focused?.classList.contains("group-header") ? focused.closest(".group").dataset.key : null;
+    const typing = focused?.classList.contains("reason")
       ? {
           id: document.activeElement.closest(".detail").dataset.id,
           start: document.activeElement.selectionStart,
@@ -936,7 +956,9 @@
     }
     const shown = orderedIn(selectedStatus);
     const chosen = shown.find((triage) => triage.id === selectedId) ?? null;
-    const current = chosen ?? visibleIn(selectedStatus)[0] ?? shown[0] ?? null;
+    const newestFirst = shownIn(selectedStatus);
+    const current =
+      chosen ?? newestFirst.find((triage) => !hiddenIn(selectedStatus, triage)) ?? newestFirst[0] ?? null;
     const highlighted = chosen || wide.matches ? current : null;
     const view = chosen ? "detail" : "list";
     const viewChanged = app.dataset.view !== view;
@@ -951,6 +973,15 @@
         ? renderGroups(shown, highlighted)
         : shown.map((triage) => renderThread(triage, highlighted))),
     );
+    if (focusedThread) {
+      threads.querySelector(`.thread[href="${CSS.escape(focusedThread)}"]`)?.focus();
+    }
+    if (focusedGroup) {
+      [...threads.querySelectorAll(".group")]
+        .find((group) => group.dataset.key === focusedGroup)
+        ?.querySelector(".group-header")
+        .focus();
+    }
     detailSlot.replaceChildren(...(current ? [renderDetail(current)] : []));
     shownId = current?.id;
     if (currentChanged) {
@@ -966,11 +997,9 @@
       reason.focus();
       reason.setSelectionRange(typing.start, typing.end);
     }
-    if (loadError) {
-      setMessage("error", `読み込めませんでした: ${loadError}`);
-    } else {
-      setMessage("empty", shown.length ? "" : "このタブに PR はありません");
-    }
+    loadErrorBox.textContent = loadError ? `読み込めませんでした: ${loadError}` : "";
+    loadErrorBox.hidden = !loadError;
+    setMessage("empty", loadError || shown.length ? "" : "このタブに PR はありません");
   }
 
   async function refresh() {
@@ -993,7 +1022,12 @@
         followSelectionOnLoad = false;
         followSelection();
       }
-      dropMovedSelection();
+      if (advance) {
+        moveOnFromDecided();
+      }
+      if (selectedId !== null && triages.find((triage) => triage.id === selectedId)?.status !== selectedStatus) {
+        selectQuietly(null);
+      }
       render();
     } catch (error) {
       if (request !== latestRequest) {
@@ -1024,13 +1058,16 @@
     }
   });
   threads.addEventListener("click", (event) => {
-    if (event.target.closest(".thread")) {
+    if (event.target.closest(".thread") && !wide.matches) {
       openedFromList = true;
       listScroll = window.scrollY;
     }
   });
   wide.addEventListener("change", render);
   window.addEventListener("hashchange", () => {
+    if (followSelectionOnLoad) {
+      return;
+    }
     followSelection();
     render();
   });
