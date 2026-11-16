@@ -85,7 +85,7 @@ Claude が書く項目は次のとおりです。題、ブランチ、URL、変�
 
 同じ PR を送り直すと、カードは新しい内容に置き換わります。差し戻した PR を直して送り直すと、未判断に戻ります。
 
-報告が届くたびに、`toriage-report` がダッシュボードをブラウザで開きます(macOS は `open`、Linux は `xdg-open`)。開いているタブがあっても、新しいタブで開きます。開かないようにするには、環境変数 `TORIAGE_OPEN` を `0` にします。Claude Code の `settings.json` の `env` に書くと、差し戻しで裏で再開した Claude にも効きます。inbox に保存したときは開きません。
+報告が届くたびに、`toriage-report` がダッシュボードをブラウザで開きます(macOS は `open`、Linux は `xdg-open`。SSH でつないだときなど、画面の無い Linux では開きません)。開いているタブがあっても、新しいタブで開きます。開かないようにするには、環境変数 `TORIAGE_OPEN` を `0` にします。Claude Code の `settings.json` の `env` に書くと、差し戻しで裏で再開した Claude にも効きます。inbox に保存したときは開きません。
 
 ### 判断する
 

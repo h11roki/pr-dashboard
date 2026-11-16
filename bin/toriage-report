@@ -92,12 +92,14 @@ case "$saved" in
   true)
     echo "ダッシュボードに送った: $label"
     if [ "${TORIAGE_OPEN:-}" != 0 ]; then
-      case "$(uname -s)" in
-        Darwin) opener=open ;;
-        *) opener=xdg-open ;;
-      esac
-      if command -v "$opener" >/dev/null; then
-        "$opener" "$dashboard" </dev/null >/dev/null 2>&1 &
+      opener=""
+      if [ "$(uname -s)" = Darwin ]; then
+        opener=open
+      elif [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        opener=xdg-open
+      fi
+      if [ -n "$opener" ] && command -v "$opener" >/dev/null; then
+        nohup "$opener" "$dashboard" </dev/null >/dev/null 2>&1 &
       fi
     fi
     ;;

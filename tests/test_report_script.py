@@ -1,13 +1,15 @@
 import json
 import os
 import subprocess
+import sys
 import time
 from contextlib import closing
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from server import HOST, ROOT, Session, TriageStore
+from server import HOST, ROOT, Session, TriageStore, parse_report
 
 SCRIPT = ROOT / "bin" / "toriage-report"
 REFUSED = f"http://{HOST}:1"
@@ -66,7 +68,8 @@ def run_script(
     *args: str,
     session_id: str | None = None,
     cwd: Path | None = None,
-    open_setting: str | None = None,
+    open_setting: str | None = "0",
+    display: str | None = ":0",
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ | {
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
@@ -76,6 +79,8 @@ def run_script(
         ("TORIAGE_URL", dashboard),
         ("CLAUDE_CODE_SESSION_ID", session_id),
         ("TORIAGE_OPEN", open_setting),
+        ("DISPLAY", display),
+        ("WAYLAND_DISPLAY", None),
     ):
         environment.pop(name, None)
         if value is not None:
@@ -189,7 +194,9 @@ def test_opens_the_dashboard_after_sending(
 ) -> None:
     judgment = json.dumps(judgment_of(report))
 
-    result = run_script(fake_gh, judgment, f"http://{HOST}:{port}/", tmp_path / "home", "128")
+    result = run_script(
+        fake_gh, judgment, f"http://{HOST}:{port}/", tmp_path / "home", "128", open_setting=None
+    )
 
     assert result.returncode == 0, result.stderr
     assert opened_urls(tmp_path, 5) == [f"http://{HOST}:{port}"]
@@ -214,9 +221,45 @@ def test_does_not_open_the_dashboard_when_the_report_waits_in_the_inbox(
 ) -> None:
     judgment = json.dumps(judgment_of(report))
 
-    result = run_script(fake_gh, judgment, REFUSED, tmp_path / "home", "128")
+    result = run_script(fake_gh, judgment, REFUSED, tmp_path / "home", "128", open_setting=None)
 
     assert result.returncode == 0, result.stderr
+    assert opened_urls(tmp_path, 1) == []
+
+
+def test_does_not_open_the_dashboard_when_a_newer_report_is_kept(
+    tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
+) -> None:
+    store.save(parse_report(report), datetime.now(UTC) + timedelta(days=1))
+    judgment = json.dumps(judgment_of(report))
+
+    result = run_script(
+        fake_gh, judgment, f"http://{HOST}:{port}", tmp_path / "home", "128", open_setting=None
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "置き換えなかった" in result.stderr
+    assert opened_urls(tmp_path, 1) == []
+
+
+@pytest.mark.skipif(sys.platform == "darwin", reason="macOS は画面の有無によらず open で開く")
+def test_does_not_open_the_dashboard_without_a_display(
+    tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
+) -> None:
+    judgment = json.dumps(judgment_of(report))
+
+    result = run_script(
+        fake_gh,
+        judgment,
+        f"http://{HOST}:{port}",
+        tmp_path / "home",
+        "128",
+        open_setting=None,
+        display=None,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert len(store.list_triages()) == 1
     assert opened_urls(tmp_path, 1) == []
 
 
