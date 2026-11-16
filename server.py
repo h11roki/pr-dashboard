@@ -544,8 +544,14 @@ def _resume_environment(workdir: str) -> dict[str, str]:
 def _resume_command(session: Session, environment: dict[str, str]) -> list[str]:
     match session.agent:
         case Agent.CLAUDE:
+            claude = _find_on_path("claude", environment)
+            if claude is None:
+                raise ResumeFailed(
+                    "claude が見つからない。Claude Code の claude がある場所を PATH に入れて、"
+                    "ダッシュボードを起動し直す"
+                )
             return [
-                "claude",
+                claude,
                 "-p",
                 "--resume",
                 session.id,
@@ -567,19 +573,23 @@ def _find_codex(environment: dict[str, str]) -> str:
         if not Path(configured).is_absolute():
             raise ResumeFailed(f"TORIAGE_CODEX は絶対パスで設定する: {configured}")
         return configured
-    directories = environment.get("PATH", os.defpath).split(os.pathsep)
-    found = shutil.which(
-        "codex",
-        path=os.pathsep.join(
-            directory for directory in directories if Path(directory).is_absolute()
-        ),
-    )
+    found = _find_on_path("codex", environment)
     if found:
         return found
     for location in CODEX_LOCATIONS:
         if os.access(location, os.X_OK):
             return str(location)
     raise ResumeFailed("codex が見つからない。TORIAGE_CODEX に codex の場所を設定する")
+
+
+def _find_on_path(command: str, environment: dict[str, str]) -> str | None:
+    directories = environment.get("PATH", os.defpath).split(os.pathsep)
+    return shutil.which(
+        command,
+        path=os.pathsep.join(
+            directory for directory in directories if Path(directory).is_absolute()
+        ),
+    )
 
 
 def _is_plugin_bin(directory: Path) -> bool:

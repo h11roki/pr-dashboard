@@ -178,17 +178,22 @@ def test_rejects_a_relative_toriage_codex(
     assert not logs.exists()
 
 
-def test_does_not_run_a_codex_found_through_a_relative_path_entry(
-    tmp_path: Path, fake_agent: FakeAgent, workdir: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("agent", list(Agent))
+def test_does_not_run_an_agent_found_through_a_relative_path_entry(
+    tmp_path: Path,
+    fake_agent: FakeAgent,
+    workdir: Path,
+    agent: Agent,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    install_fake_agent(workdir / "tools" / "codex", fake_agent)
-    (fake_agent.bin_dir / "codex").unlink()
+    install_fake_agent(workdir / "tools" / agent.value, fake_agent)
+    (fake_agent.bin_dir / agent.value).unlink()
     monkeypatch.chdir(workdir)
     monkeypatch.setenv("PATH", f"tools{os.pathsep}{os.environ['PATH']}")
 
-    with pytest.raises(ResumeFailed, match="codex が見つからない"):
+    with pytest.raises(ResumeFailed, match=f"{agent.value} が見つからない"):
         resume_in_background(tmp_path / "returns")(
-            Session(id=SESSION_ID, workdir=str(workdir), agent=Agent.CODEX), "直してください"
+            Session(id=SESSION_ID, workdir=str(workdir), agent=agent), "直してください"
         )
 
     assert not fake_agent.calls.exists()
@@ -445,8 +450,9 @@ def test_fails_when_claude_code_is_not_installed(
     tmp_path: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    logs = tmp_path / "returns"
 
     with pytest.raises(ResumeFailed, match="Claude Code"):
-        resume_in_background(tmp_path / "returns")(
-            Session(id=SESSION_ID, workdir=str(workdir)), "直してください"
-        )
+        resume_in_background(logs)(Session(id=SESSION_ID, workdir=str(workdir)), "直してください")
+
+    assert not logs.exists()
