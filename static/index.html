@@ -561,6 +561,17 @@
   });
   const ageFormat = new Intl.RelativeTimeFormat("ja", { numeric: "auto" });
   const SELECTION = /^#pr-([0-9]+)$/;
+  const DETAIL_CONTROLS = [
+    "[data-action=request-review]",
+    "[data-action=return]",
+    "[data-action=hold]",
+    "[data-confirm]",
+    "[data-cancel]",
+    ".pr-link",
+    ".artifact-link",
+    ".back",
+  ];
+  const FIRST_CONTROL = ".actions button, .pr-link";
   const app = document.querySelector(".app");
   const main = document.querySelector(".main");
   const tabs = [...document.querySelectorAll(".tabs-trigger")];
@@ -626,7 +637,11 @@
     const selected = triages.find((triage) => triage.id === selectedId);
     if (selected) {
       selectedStatus = selected.status;
-    } else if (selectedId !== null) {
+    }
+  }
+
+  function dropSelectionOutsideTab() {
+    if (selectedId !== null && triages.find((triage) => triage.id === selectedId)?.status !== selectedStatus) {
       selectQuietly(null);
     }
   }
@@ -650,11 +665,14 @@
   }
 
   function moveOnFromDecided() {
-    const { id, status, following, preceding } = advance;
-    advance = null;
+    const { id, status, following, preceding, settled } = advance;
     if (shownIn(status).some((shown) => shown.id === id)) {
+      if (settled) {
+        advance = null;
+      }
       return;
     }
+    advance = null;
     if (status !== selectedStatus || (selectedId !== id && selectedId !== null)) {
       return;
     }
@@ -697,12 +715,6 @@
     element.querySelector(selector).replaceChildren(
       ...items.map((item) => Object.assign(document.createElement("li"), { textContent: item })),
     );
-  }
-
-  function setMessage(kind, text) {
-    message.dataset.kind = kind;
-    message.textContent = text;
-    message.hidden = text === "";
   }
 
   function addNotice(triage, text) {
@@ -760,15 +772,11 @@
     const slash = repo.indexOf("/");
     group.open = !collapsedProjects.has(key);
     group.addEventListener("toggle", () => {
-      if (group.open !== collapsedProjects.has(key)) {
-        return;
-      }
       if (group.open) {
         collapsedProjects.delete(key);
       } else {
         collapsedProjects.add(key);
       }
-      render();
     });
     group.dataset.key = key;
     setText(group, ".group-owner", repo.slice(0, slash + 1));
@@ -853,23 +861,30 @@
     const status = selectedStatus;
     const order = orderedIn(status).map((shown) => shown.id);
     const index = order.indexOf(triage.id);
+    const intent = {
+      id: triage.id,
+      status,
+      following: order.slice(index + 1),
+      preceding: order.slice(0, index).reverse(),
+      settled: false,
+    };
+    const focusWasInDetail = Boolean(document.activeElement?.closest(".detail"));
     draft.error = "";
+    advance = intent;
     runningDecisions.add(triage.id);
     render();
     try {
       const decision = await postDecision(triage, draft.action, draft.reason);
-      advance = {
-        id: triage.id,
-        status,
-        following: order.slice(index + 1),
-        preceding: order.slice(0, index).reverse(),
-      };
+      intent.settled = true;
       drafts.delete(triage.id);
       if (decision.warning) {
         addNotice(triage, decision.warning);
       }
     } catch (problem) {
       draft.error = `できませんでした: ${problem.message}`;
+      if (advance === intent) {
+        advance = null;
+      }
     } finally {
       runningDecisions.delete(triage.id);
     }
@@ -878,6 +893,9 @@
       addNotice(triage, draft.error);
     }
     render();
+    if (focusWasInDetail && !detailSlot.contains(document.activeElement)) {
+      detailSlot.querySelector(FIRST_CONTROL)?.focus({ preventScroll: true });
+    }
   }
 
   function setUpDecisions(detail, triage) {
@@ -942,6 +960,13 @@
     const focused = document.activeElement;
     const focusedThread = focused?.classList.contains("thread") ? focused.getAttribute("href") : null;
     const focusedGroup = focused?.classList.contains("group-header") ? focused.closest(".group").dataset.key : null;
+    const focusedControl =
+      focused?.closest(".detail") && !focused.classList.contains("reason")
+      ? {
+          id: focused.closest(".detail").dataset.id,
+          selector: DETAIL_CONTROLS.find((selector) => focused.matches(selector)),
+        }
+      : null;
     const typing = focused?.classList.contains("reason")
       ? {
           id: document.activeElement.closest(".detail").dataset.id,
@@ -956,11 +981,13 @@
     }
     const shown = orderedIn(selectedStatus);
     const chosen = shown.find((triage) => triage.id === selectedId) ?? null;
-    const newestFirst = shownIn(selectedStatus);
     const current =
-      chosen ?? newestFirst.find((triage) => !hiddenIn(selectedStatus, triage)) ?? newestFirst[0] ?? null;
-    const highlighted = chosen || wide.matches ? current : null;
-    const view = chosen ? "detail" : "list";
+      chosen ?? shownIn(selectedStatus).find((triage) => !hiddenIn(selectedStatus, triage)) ?? null;
+    if (!chosen && current && wide.matches) {
+      selectQuietly(current.id);
+    }
+    const highlighted = selectedId === current?.id ? current : null;
+    const view = highlighted ? "detail" : "list";
     const viewChanged = app.dataset.view !== view;
     const currentChanged = current?.id !== shownId;
     app.dataset.view = view;
@@ -997,9 +1024,17 @@
       reason.focus();
       reason.setSelectionRange(typing.start, typing.end);
     }
+    if (focusedControl && current) {
+      const detail = detailSlot.querySelector(".detail");
+      const same = String(current.id) === focusedControl.id && focusedControl.selector;
+      const target = (same && detail.querySelector(focusedControl.selector)) || detail.querySelector(FIRST_CONTROL);
+      target?.focus({ preventScroll: true });
+    }
     loadErrorBox.textContent = loadError ? `読み込めませんでした: ${loadError}` : "";
     loadErrorBox.hidden = !loadError;
-    setMessage("empty", loadError || shown.length ? "" : "このタブに PR はありません");
+    message.textContent = loadError || shown.length ? "" : "このタブに PR はありません";
+    message.dataset.kind = "empty";
+    message.hidden = message.textContent === "";
   }
 
   async function refresh() {
@@ -1010,7 +1045,14 @@
         throw new Error(`HTTP ${response.status}`);
       }
       const text = await response.text();
-      if (request !== latestRequest || (text === lastResponse && !loadError)) {
+      if (request !== latestRequest) {
+        return;
+      }
+      if (text === lastResponse && !loadError) {
+        if (advance) {
+          moveOnFromDecided();
+          render();
+        }
         return;
       }
       const previouslyReceived = new Map(triages.map((triage) => [triage.id, triage.received_at]));
@@ -1025,9 +1067,7 @@
       if (advance) {
         moveOnFromDecided();
       }
-      if (selectedId !== null && triages.find((triage) => triage.id === selectedId)?.status !== selectedStatus) {
-        selectQuietly(null);
-      }
+      dropSelectionOutsideTab();
       render();
     } catch (error) {
       if (request !== latestRequest) {
@@ -1058,8 +1098,8 @@
     }
   });
   threads.addEventListener("click", (event) => {
-    if (event.target.closest(".thread") && !wide.matches) {
-      openedFromList = true;
+    if (event.target.closest(".thread")) {
+      openedFromList = !wide.matches;
       listScroll = window.scrollY;
     }
   });
@@ -1069,6 +1109,7 @@
       return;
     }
     followSelection();
+    dropSelectionOutsideTab();
     render();
   });
   window.addEventListener("focus", refresh);
