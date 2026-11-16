@@ -163,6 +163,37 @@ def test_uses_the_codex_named_in_toriage_codex(
     fake_agent.finish()
 
 
+def test_rejects_a_relative_toriage_codex(
+    tmp_path: Path, fake_agent: FakeAgent, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TORIAGE_CODEX", "bin/codex")
+    logs = tmp_path / "returns"
+
+    with pytest.raises(ResumeFailed, match="絶対パス"):
+        resume_in_background(logs)(
+            Session(id=SESSION_ID, workdir=str(workdir), agent=Agent.CODEX), "直してください"
+        )
+
+    assert not fake_agent.calls.exists()
+    assert not logs.exists()
+
+
+def test_does_not_run_a_codex_found_through_a_relative_path_entry(
+    tmp_path: Path, fake_agent: FakeAgent, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install_fake_agent(workdir / "tools" / "codex", fake_agent)
+    (fake_agent.bin_dir / "codex").unlink()
+    monkeypatch.chdir(workdir)
+    monkeypatch.setenv("PATH", f"tools{os.pathsep}{os.environ['PATH']}")
+
+    with pytest.raises(ResumeFailed, match="codex が見つからない"):
+        resume_in_background(tmp_path / "returns")(
+            Session(id=SESSION_ID, workdir=str(workdir), agent=Agent.CODEX), "直してください"
+        )
+
+    assert not fake_agent.calls.exists()
+
+
 def test_finds_codex_inside_an_app_when_it_is_not_on_the_path(
     tmp_path: Path, fake_agent: FakeAgent, workdir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

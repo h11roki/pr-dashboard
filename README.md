@@ -112,7 +112,7 @@ http://127.0.0.1:8787 を開き、未判断のカードを開いてボタンを�
 
 差し戻しには、報告を送った会話の ID が要ります。`toriage-report` が、Claude Code の `CLAUDE_CODE_SESSION_ID` か Codex の `CODEX_THREAD_ID` から自動で付けます。どちらでもない場所から送った報告と、両方がある環境(Claude Code の中で Codex を動かしたときなど)から送った報告には、差し戻しのボタンが出ません。
 
-裏の Claude は `claude -p --resume <ID> --permission-mode auto` で動き、安全と判定された操作(編集、テスト、push など)だけを行います。裏の Codex は `codex exec resume <ID>` で動きます。作業ツリーへの書き込みだけを許すサンドボックスに入れ、push のようにそれを超える操作は Codex の自動の審査(`--approve-for-me` と同じ設定)に任せます。`codex` は、環境変数 `TORIAGE_CODEX`、PATH、ChatGPT アプリと Codex アプリの中の順に探します。
+裏の Claude は `claude -p --resume <ID> --permission-mode auto` で動き、安全と判定された操作(編集、テスト、push など)だけを行います。裏の Codex は `codex exec resume <ID>` で動きます。作業ツリーへの書き込みだけを許すサンドボックスに入れ、push のようにそれを超える操作は Codex の自動の審査(`--approve-for-me` と同じ設定)に任せます。`codex` は、環境変数 `TORIAGE_CODEX`(絶対パスで設定します)、PATH、ChatGPT アプリと Codex アプリの中の順に探します。
 
 様子は `returns/<ID>.log` か、`claude --resume <ID>`、`codex resume <ID>` で見られます。T3 Code や Codex アプリなどで同じ会話を開いたままにしていると、その画面には出ず、会話が枝分かれします。
 

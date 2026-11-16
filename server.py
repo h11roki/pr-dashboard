@@ -564,8 +564,16 @@ def _resume_command(session: Session, environment: dict[str, str]) -> list[str]:
 def _find_codex(environment: dict[str, str]) -> str:
     configured = environment.get("TORIAGE_CODEX")
     if configured:
+        if not Path(configured).is_absolute():
+            raise ResumeFailed(f"TORIAGE_CODEX は絶対パスで設定する: {configured}")
         return configured
-    found = shutil.which("codex", path=environment.get("PATH"))
+    directories = environment.get("PATH", os.defpath).split(os.pathsep)
+    found = shutil.which(
+        "codex",
+        path=os.pathsep.join(
+            directory for directory in directories if Path(directory).is_absolute()
+        ),
+    )
     if found:
         return found
     for location in CODEX_LOCATIONS:
