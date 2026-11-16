@@ -95,7 +95,7 @@ PR を作ったら、スキル toriage:report でダッシュボードに判断�
 
 同じ PR を送り直すと、判断材料は新しい内容に置き換わります。差し戻した PR を直して送り直すと、未判断に戻ります。
 
-報告が届くたびに、`toriage-report` が通知で知らせます。ページは開きません。macOS は通知センターに出し、[terminal-notifier](https://github.com/julienXX/terminal-notifier)(`brew install terminal-notifier`)が入っていれば、通知を押すとダッシュボードが開きます。入っていなければ `osascript` で出し、押しても開きません。macOS の設定で「スクリプトエディタ」の通知を許していないと出ません。Linux は、画面があって `notify-send` があるときだけ出します。通知を止めるには、環境変数 `TORIAGE_NOTIFY` を `0` にします。Claude Code の `settings.json` の `env` に書くと、差し戻しで裏で再開した Claude にも効きます。Codex では `config.toml` の `shell_environment_policy.set` に書きます。inbox に保存したときは出しません。
+報告が届くたびに、`toriage-report` が通知で知らせます。ページは開きません。macOS は通知センターに出し、[terminal-notifier](https://github.com/julienXX/terminal-notifier)(`brew install terminal-notifier`)が入っていれば、通知を押すとダッシュボードが開き、同じ PR を送り直したときは前の通知が新しい通知に置き換わります。入っていなければ `osascript` で出し、押しても開かず、送り直すたびに通知が重なります。macOS の設定で「スクリプトエディタ」の通知を許していないと出ません。Linux は、画面があって `notify-send` があるときだけ出します。通知を止めるには、環境変数 `TORIAGE_NOTIFY` を `0` にします。Claude Code の `settings.json` の `env` に書くと、差し戻しで裏で再開した Claude にも効きます。Codex では `config.toml` の `shell_environment_policy.set` に書きます。inbox に保存したときは出しません。
 
 Codex はプラグインの `bin` を PATH に入れないので、スキルに書いた場所から送信スクリプトを動かします。手元のダッシュボードと GitHub につなぐため、送るたびにサンドボックスの外で動かす許可を求めます。
 
