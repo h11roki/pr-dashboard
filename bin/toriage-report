@@ -31,13 +31,26 @@ facts="$(gh pr view "$1" --json number,url,title,headRefName,additions,deletions
 
 branch="$(git branch --show-current 2>/dev/null)" || branch=""
 workdir="$(git rev-parse --show-toplevel 2>/dev/null)" || workdir=""
+claude_session="${CLAUDE_CODE_SESSION_ID:-}"
+codex_session="${CODEX_THREAD_ID:-}"
+agent=""
+session_id=""
+if [ -n "$claude_session" ] && [ -z "$codex_session" ]; then
+  agent=claude
+  session_id="$claude_session"
+elif [ -z "$claude_session" ] && [ -n "$codex_session" ]; then
+  agent=codex
+  session_id="$codex_session"
+elif [ -n "$claude_session" ]; then
+  echo "CLAUDE_CODE_SESSION_ID と CODEX_THREAD_ID の両方があり、どちらの会話から送ったか分からないので、この報告の差し戻しはできない" >&2
+fi
 
-body="$(jq -c --argjson facts "$facts" --arg session_id "${CLAUDE_CODE_SESSION_ID:-}" \
+body="$(jq -c --argjson facts "$facts" --arg session_id "$session_id" --arg agent "$agent" \
   --arg branch "$branch" --arg workdir "$workdir" '
   . + {
     session: (
       if $session_id != "" and $workdir != "" and $branch == $facts.headRefName
-      then {id: $session_id, workdir: $workdir}
+      then {id: $session_id, workdir: $workdir, agent: $agent}
       else null
       end
     ),

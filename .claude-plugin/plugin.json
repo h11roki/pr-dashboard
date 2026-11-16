@@ -1,10 +1,10 @@
 {
   "name": "toriage",
   "version": "0.6.0",
-  "description": "Claude Code が作った PR の判断材料を手元のダッシュボードに集め、レビュー依頼・差し戻し・保留をその場で GitHub に反映する",
+  "description": "Claude Code や Codex が作った PR の判断材料を手元のダッシュボードに集め、レビュー依頼・差し戻し・保留をその場で GitHub に反映する",
   "author": { "name": "h11roki" },
   "homepage": "https://github.com/h11roki/toriage",
   "repository": "https://github.com/h11roki/toriage",
   "license": "MIT",
-  "keywords": ["pull-request", "triage", "github", "dashboard"]
+  "keywords": ["pull-request", "triage", "github", "dashboard", "claude-code", "codex"]
 }

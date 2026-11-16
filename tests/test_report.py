@@ -4,7 +4,7 @@ import sys
 
 import pytest
 
-from server import MAX_BODY_BYTES, ROOT, InvalidReport, Session, parse_body, parse_report
+from server import MAX_BODY_BYTES, ROOT, Agent, InvalidReport, Session, parse_body, parse_report
 
 SESSION_ID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 
@@ -23,10 +23,20 @@ def test_artifact_url_may_be_left_out(report: dict[str, object]) -> None:
     assert parse_report(report).artifact_url is None
 
 
-def test_keeps_the_session_that_made_the_pr(report: dict[str, object]) -> None:
+def test_reads_a_session_without_an_agent_as_claude_code(report: dict[str, object]) -> None:
     report["session"] = {"id": SESSION_ID, "workdir": "/work/web"}
 
-    assert parse_report(report).session == Session(id=SESSION_ID, workdir="/work/web")
+    assert parse_report(report).session == Session(
+        id=SESSION_ID, workdir="/work/web", agent=Agent.CLAUDE
+    )
+
+
+def test_keeps_the_codex_session_that_made_the_pr(report: dict[str, object]) -> None:
+    report["session"] = {"id": SESSION_ID, "workdir": "/work/web", "agent": "codex"}
+
+    assert parse_report(report).session == Session(
+        id=SESSION_ID, workdir="/work/web", agent=Agent.CODEX
+    )
 
 
 @pytest.mark.parametrize(
@@ -38,6 +48,8 @@ def test_keeps_the_session_that_made_the_pr(report: dict[str, object]) -> None:
         {"id": SESSION_ID.upper(), "workdir": "/work/web"},
         {"id": SESSION_ID, "workdir": "work/web"},
         {"id": SESSION_ID, "workdir": "/work/\0web"},
+        {"id": SESSION_ID, "workdir": "/work/web", "agent": "cursor"},
+        {"id": SESSION_ID, "workdir": "/work/web", "agent": None},
     ],
 )
 def test_keeps_the_report_but_not_a_session_that_cannot_be_resumed(
