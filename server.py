@@ -491,11 +491,11 @@ def resume_in_background(logs: Path) -> ResumeSession:
         if not Path(session.workdir).is_dir():
             raise ResumeFailed(f"PR を作った場所 {session.workdir} がもうない")
         environment = _resume_environment(session.workdir)
-        command = _resume_command(session, prompt, environment)
+        command = _resume_command(session, environment)
         log = logs / f"{session.id}.log"
         marker = logs / f"{session.id}.pid"
         with lock:
-            if _still_resuming(marker, session):
+            if _still_resuming(marker, command):
                 raise SessionBusy("この会話は前の差し戻しをまだ直している。終わってから差し戻す")
             try:
                 logs.mkdir(parents=True, exist_ok=True)
@@ -503,7 +503,7 @@ def resume_in_background(logs: Path) -> ResumeSession:
                     output.write(f"{_now()} に差し戻した\n")
                     output.flush()
                     process = subprocess.Popen(
-                        command,
+                        [*command, prompt],
                         cwd=session.workdir,
                         env=environment,
                         stdin=subprocess.DEVNULL,
@@ -539,7 +539,7 @@ def _resume_environment(workdir: str) -> dict[str, str]:
     return environment
 
 
-def _resume_command(session: Session, prompt: str, environment: dict[str, str]) -> list[str]:
+def _resume_command(session: Session, environment: dict[str, str]) -> list[str]:
     match session.agent:
         case Agent.CLAUDE:
             return [
@@ -551,11 +551,10 @@ def _resume_command(session: Session, prompt: str, environment: dict[str, str]) 
                 "auto",
                 "--permission-prompts",
                 "none",
-                prompt,
             ]
         case Agent.CODEX:
             codex = _find_codex(environment)
-            return [codex, "exec", "resume", *CODEX_RESUME_SETTINGS, session.id, prompt]
+            return [codex, "exec", "resume", *CODEX_RESUME_SETTINGS, session.id]
         case _:
             assert_never(session.agent)
 
@@ -578,10 +577,10 @@ def _is_plugin_bin(directory: Path) -> bool:
     return (resolved / REPORT_COMMAND).is_file() and (resolved.parent / PLUGIN_MANIFEST).is_file()
 
 
-def _still_resuming(marker: Path, session: Session) -> bool:
+def _still_resuming(marker: Path, command: list[str]) -> bool:
     try:
         pid = int(marker.read_text(encoding="utf-8"))
-        command = subprocess.run(
+        running = subprocess.run(
             ["ps", "-p", str(pid), "-o", "command="],
             capture_output=True,
             text=True,
@@ -589,7 +588,7 @@ def _still_resuming(marker: Path, session: Session) -> bool:
         ).stdout
     except (OSError, ValueError):
         return False
-    return session.id in command.split()
+    return " ".join(command[1:]) in running
 
 
 def _now() -> str:

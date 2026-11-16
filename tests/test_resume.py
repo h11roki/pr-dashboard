@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -287,19 +288,33 @@ def test_does_not_resume_a_session_that_is_still_running(
     wait_until(lambda: log_of(logs).count("終了コード") == 2)
 
 
+SLEEPER = [sys.executable, "-c", "import time; time.sleep(30)"]
+
+
+@pytest.mark.parametrize(
+    ("agent", "stranger"),
+    [
+        (Agent.CLAUDE, ["sleep", "30"]),
+        (Agent.CLAUDE, [*SLEEPER, "claude", "--resume", SESSION_ID]),
+        (Agent.CODEX, [*SLEEPER, "codex", "resume", SESSION_ID]),
+    ],
+    ids=["unrelated", "claude-opened-by-hand", "codex-opened-by-hand"],
+)
 def test_a_pid_left_behind_by_another_process_does_not_block(
-    tmp_path: Path, fake_agent: FakeAgent, workdir: Path
+    tmp_path: Path, fake_agent: FakeAgent, workdir: Path, agent: Agent, stranger: list[str]
 ) -> None:
     logs = tmp_path / "returns"
     logs.mkdir()
-    with subprocess.Popen(["sleep", "30"]) as stranger:
-        (logs / f"{SESSION_ID}.pid").write_text(f"{stranger.pid}\n", encoding="utf-8")
+    with subprocess.Popen(stranger) as reused:
+        (logs / f"{SESSION_ID}.pid").write_text(f"{reused.pid}\n", encoding="utf-8")
         try:
-            resume_in_background(logs)(Session(id=SESSION_ID, workdir=str(workdir)), "直して")
+            resume_in_background(logs)(
+                Session(id=SESSION_ID, workdir=str(workdir), agent=agent), "直して"
+            )
 
             assert fake_agent.call()["args"]
         finally:
-            stranger.kill()
+            reused.kill()
             fake_agent.finish()
 
 
