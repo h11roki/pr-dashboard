@@ -3,7 +3,7 @@ import os
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -76,14 +76,15 @@ def install_fake_agent(command: Path, fake: FakeAgent) -> None:
 
 
 @pytest.fixture
-def fake_agent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeAgent:
+def fake_agent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeAgent]:
     fake = FakeAgent(tmp_path)
     for name in ("claude", "codex"):
         install_fake_agent(fake.bin_dir / name, fake)
     monkeypatch.setenv("PATH", f"{fake.bin_dir}:/usr/bin:/bin")
     monkeypatch.delenv("TORIAGE_CODEX", raising=False)
     monkeypatch.setattr(server, "CODEX_LOCATIONS", (tmp_path / "no-app" / "codex",))
-    return fake
+    yield fake
+    fake.finish()
 
 
 @pytest.fixture
@@ -160,7 +161,6 @@ def test_uses_the_codex_named_in_toriage_codex(
     )
 
     assert fake_agent.call()["args"] == [*CODEX_RESUME_ARGS, SESSION_ID, "直してください"]
-    fake_agent.finish()
 
 
 def test_rejects_a_relative_toriage_codex(
@@ -227,7 +227,6 @@ def test_finds_codex_inside_an_app_when_it_is_not_on_the_path(
     )
 
     assert fake_agent.call()["args"] == [*CODEX_RESUME_ARGS, SESSION_ID, "直してください"]
-    fake_agent.finish()
 
 
 def test_fails_when_codex_cannot_be_found(
@@ -271,7 +270,6 @@ def test_leaves_out_the_plugin_bin_the_server_was_started_with(
     )
 
     assert fake_agent.call()["path"] == path_without_plugin
-    fake_agent.finish()
 
 
 def test_leaves_out_a_plugin_bin_reached_through_a_symlink(
@@ -287,7 +285,6 @@ def test_leaves_out_a_plugin_bin_reached_through_a_symlink(
     )
 
     assert fake_agent.call()["path"] == path_without_plugin
-    fake_agent.finish()
 
 
 def test_checks_a_relative_path_entry_from_the_workdir(
@@ -305,7 +302,6 @@ def test_checks_a_relative_path_entry_from_the_workdir(
     )
 
     assert fake_agent.call()["path"] == path_without_plugin
-    fake_agent.finish()
 
 
 def test_keeps_a_directory_that_holds_the_report_command_outside_a_plugin(
@@ -318,7 +314,6 @@ def test_keeps_a_directory_that_holds_the_report_command_outside_a_plugin(
     )
 
     assert fake_agent.call()["path"] == os.environ["PATH"]
-    fake_agent.finish()
 
 
 @pytest.mark.parametrize("agent", list(Agent))
@@ -357,8 +352,6 @@ def test_sees_a_running_resume_even_when_columns_is_narrow(
     with pytest.raises(SessionBusy, match="まだ直している"):
         resume(session, "もう一度")
 
-    fake_agent.finish()
-
 
 SLEEPER = [sys.executable, "-c", "import time; time.sleep(30)"]
 
@@ -387,7 +380,6 @@ def test_a_pid_left_behind_by_another_process_does_not_block(
             assert fake_agent.call()["args"]
         finally:
             reused.kill()
-            fake_agent.finish()
 
 
 def is_running(pid: int) -> bool:
