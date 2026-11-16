@@ -142,8 +142,8 @@ def test_a_new_report_brings_a_closed_pr_back(
     store: TriageStore, report: dict[str, object]
 ) -> None:
     save(store, report, 128)
-    [triage] = store.list_triages()
-    store.mark_closed({triage.id: "closed"})
+    [open_pr] = store.open_pull_requests()
+    store.mark_closed({open_pr: "closed"})
 
     store.save(parse_report(report), MORNING + timedelta(hours=1))
 
@@ -162,8 +162,8 @@ def test_adds_the_closed_column_to_a_database_made_before_it(
         )
 
     with closing(TriageStore(path)) as store:
-        [triage] = store.list_triages()
-        store.mark_closed({triage.id: "merged"})
+        [open_pr] = store.open_pull_requests()
+        store.mark_closed({open_pr: "merged"})
         assert by_number(store) == {128: ("pending", "merged", 0)}
 
 
@@ -212,6 +212,39 @@ def test_fails_with_what_gh_said_when_the_answer_cannot_be_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("PATH", f"{write_gh(tmp_path, 'not json', 1)}{os.pathsep}/usr/bin:/bin")
+
+    with pytest.raises(GhFailed, match="Could not resolve"):
+        pull_request_states([("acme/web", 128)])
+
+
+def test_does_not_close_a_pr_reported_again_while_github_was_asked(
+    store: TriageStore, report: dict[str, object]
+) -> None:
+    save(store, report, 128)
+    [asked] = store.open_pull_requests()
+    store.save(parse_report(report), MORNING + timedelta(hours=1))
+
+    assert store.mark_closed({asked: "closed"}) == 0
+    assert by_number(store) == {128: ("pending", None, 2)}
+
+
+def test_does_not_record_a_decision_on_a_pr_that_closed_meanwhile(
+    store: TriageStore, report: dict[str, object]
+) -> None:
+    save(store, report, 128)
+    [seen] = store.list_triages()
+    [open_pr] = store.open_pull_requests()
+    store.mark_closed({open_pr: "merged"})
+
+    assert store.decide(seen, "on_hold", None, MORNING) == (False, False)
+    assert by_number(store) == {128: ("pending", "merged", 0)}
+
+
+def test_fails_when_github_returns_no_states_at_all(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    answer = json.dumps({"data": None, "errors": [{"message": "too complex"}]})
+    monkeypatch.setenv("PATH", f"{write_gh(tmp_path, answer, 1)}{os.pathsep}/usr/bin:/bin")
 
     with pytest.raises(GhFailed, match="Could not resolve"):
         pull_request_states([("acme/web", 128)])

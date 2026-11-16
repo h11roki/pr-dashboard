@@ -116,15 +116,15 @@ WHERE id = ?
 """
 
 SELECT_OPEN = """
-SELECT id, repo, number FROM prs WHERE closed IS NULL
+SELECT id, repo, number, received_at FROM prs WHERE closed IS NULL
 """
 
 MARK_CLOSED = """
-UPDATE prs SET closed = ? WHERE id = ? AND closed IS NULL
+UPDATE prs SET closed = ? WHERE id = ? AND received_at = ? AND closed IS NULL
 """
 
 SELECT_DECISION_STATE = """
-SELECT status, received_at FROM prs WHERE id = ?
+SELECT status, closed, received_at FROM prs WHERE id = ?
 """
 
 UPDATE_DECISION = """
@@ -235,6 +235,14 @@ class Report:
     suggested_reviewers: tuple[str, ...]
     artifact_url: str | None
     session: Session | None
+
+
+@dataclass(frozen=True)
+class OpenPullRequest:
+    id: int
+    repo: str
+    number: int
+    received_at: str
 
 
 @dataclass(frozen=True)
@@ -393,16 +401,23 @@ class TriageStore:
             row = self._connection.execute(SELECT_TRIAGE, (triage_id,)).fetchone()
         return None if row is None else self._triage(row)
 
-    def open_pull_requests(self) -> list[tuple[int, str, int]]:
+    def open_pull_requests(self) -> list[OpenPullRequest]:
         with self._lock:
             rows = self._connection.execute(SELECT_OPEN).fetchall()
-        return [(row["id"], row["repo"], row["number"]) for row in rows]
+        return [
+            OpenPullRequest(
+                id=row["id"], repo=row["repo"], number=row["number"], received_at=row["received_at"]
+            )
+            for row in rows
+        ]
 
-    def mark_closed(self, closed: dict[int, str]) -> int:
+    def mark_closed(self, closed: dict[OpenPullRequest, str]) -> int:
         with self._lock, self._connection:
             return sum(
-                self._connection.execute(MARK_CLOSED, (state, triage_id)).rowcount
-                for triage_id, state in closed.items()
+                self._connection.execute(
+                    MARK_CLOSED, (state, pull_request.id, pull_request.received_at)
+                ).rowcount
+                for pull_request, state in closed.items()
             )
 
     def decide(
@@ -411,7 +426,7 @@ class TriageStore:
         decided = decided_at.astimezone(UTC).isoformat(timespec="milliseconds")
         with self._lock, self._connection:
             row = self._connection.execute(SELECT_DECISION_STATE, (triage.id,)).fetchone()
-            if row is None or row["status"] != triage.status:
+            if row is None or row["status"] != triage.status or row["closed"] is not None:
                 return False, False
             self._connection.execute(UPDATE_DECISION, (status, note, decided, triage.id))
         return True, row["received_at"] != triage.received_at
@@ -498,9 +513,11 @@ def pull_request_states(pull_requests: list[tuple[str, int]]) -> dict[tuple[str,
         data = json.loads(completed.stdout)["data"]
     except (ValueError, KeyError, TypeError) as error:
         raise GhFailed(completed.stderr.strip() or "gh の答えを読めなかった") from error
+    if not isinstance(data, dict):
+        raise GhFailed(completed.stderr.strip() or "GitHub が PR の状態を返さなかった")
     states = {}
     for index, pull_request in enumerate(pull_requests):
-        repository = data.get(f"p{index}") if isinstance(data, dict) else None
+        repository = data.get(f"p{index}")
         found = repository.get("pullRequest") if isinstance(repository, dict) else None
         state = found.get("state") if isinstance(found, dict) else None
         if isinstance(state, str):
@@ -512,12 +529,12 @@ def sync_closed(store: TriageStore, fetch_states: FetchStates) -> int:
     open_prs = store.open_pull_requests()
     if not open_prs:
         return 0
-    states = fetch_states([(repo, number) for _, repo, number in open_prs])
+    states = fetch_states([(found.repo, found.number) for found in open_prs])
     closed = {}
-    for triage_id, repo, number in open_prs:
-        state = states.get((repo, number))
+    for found in open_prs:
+        state = states.get((found.repo, found.number))
         if state in CLOSED_STATES:
-            closed[triage_id] = CLOSED_STATES[state]
+            closed[found] = CLOSED_STATES[state]
     return store.mark_closed(closed)
 
 
@@ -803,6 +820,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._send_json(HTTPStatus.OK, {"saved": saved})
 
     def _sync_closed(self) -> None:
+        if self._read_json_body() is None:
+            return
         try:
             closed = self.server.sync_closed_if_due()
         except (GhFailed, sqlite3.Error) as error:

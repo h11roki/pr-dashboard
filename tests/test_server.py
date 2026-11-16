@@ -21,6 +21,7 @@ from server import (
 )
 
 CLIENT_TIMEOUT_SECONDS = 5
+SYNC_REQUEST = (b"{}", {"Content-Type": "application/json"})
 
 
 def send(
@@ -211,7 +212,7 @@ def test_the_page_can_ask_for_a_check(
     store.save(parse_report(report), datetime.now(UTC))
     github_states[("acme/web", 128)] = "MERGED"
 
-    status, body = send(port, "POST", "/api/prs/sync")
+    status, body = send(port, "POST", "/api/prs/sync", *SYNC_REQUEST)
     _, listed = send(port, "GET", "/api/prs")
 
     assert (status, json.loads(body)) == (200, {"closed": 1})
@@ -227,7 +228,7 @@ def test_reports_a_failed_check_and_changes_nothing(
     store.save(parse_report(report), datetime.now(UTC))
     state_failures.append(GhFailed("gh auth login が要る"))
 
-    status, body = send(port, "POST", "/api/prs/sync")
+    status, body = send(port, "POST", "/api/prs/sync", *SYNC_REQUEST)
 
     assert status == 502
     assert "gh auth login" in json.loads(body)["error"]
@@ -238,7 +239,22 @@ def test_reports_a_failed_check_and_changes_nothing(
 def test_refuses_a_check_from_another_site(
     port: int, state_requests: list[list[tuple[str, int]]]
 ) -> None:
-    status, _ = send(port, "POST", "/api/prs/sync", headers={"Origin": "https://example.com"})
+    status, _ = send(
+        port,
+        "POST",
+        "/api/prs/sync",
+        SYNC_REQUEST[0],
+        SYNC_REQUEST[1] | {"Origin": "https://example.com"},
+    )
 
     assert status == 403
+    assert state_requests == []
+
+
+def test_refuses_a_check_that_is_not_json(
+    port: int, state_requests: list[list[tuple[str, int]]]
+) -> None:
+    status, _ = send(port, "POST", "/api/prs/sync", b"{}", {"Content-Type": "text/plain"})
+
+    assert status == 415
     assert state_requests == []

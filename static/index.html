@@ -602,7 +602,7 @@
   const FIRST_CONTROL = ".actions button, .pr-link";
   const app = document.querySelector(".app");
   const main = document.querySelector(".main");
-  const tabs = [...document.querySelectorAll("[data-status]")];
+  const tabs = [...document.querySelectorAll(".tabs-trigger, .archive")];
   const threads = document.getElementById("threads");
   const detailSlot = document.getElementById("detail");
   const message = document.getElementById("message");
@@ -641,7 +641,7 @@
 
   function updateViewState(previouslyReceived) {
     const byId = new Map(triages.map((triage) => [triage.id, triage]));
-    const keys = new Set(triages.map((triage) => projectKey(triage.status, triage.report.repo)));
+    const keys = new Set(triages.map((triage) => projectKey(tabOf(triage), triage.report.repo)));
     for (const key of collapsedProjects) {
       if (!keys.has(key)) {
         collapsedProjects.delete(key);
@@ -654,7 +654,7 @@
     }
     for (const triage of triages) {
       if (previouslyReceived.get(triage.id) !== triage.received_at) {
-        collapsedProjects.delete(projectKey(triage.status, triage.report.repo));
+        collapsedProjects.delete(projectKey(tabOf(triage), triage.report.repo));
       }
     }
   }
@@ -787,7 +787,7 @@
     const { report } = triage;
     const risk = RISKS[report.risk];
     thread.href = `#pr-${triage.id}`;
-    thread.dataset.tone = risk.tone;
+    thread.dataset.tone = triage.closed ? CLOSED[triage.closed].tone : risk.tone;
     if (triage === highlighted) {
       thread.setAttribute("aria-current", "page");
     }
@@ -1121,7 +1121,11 @@
 
   async function syncClosed() {
     try {
-      const response = await fetch("/api/prs/sync", { method: "POST" });
+      const response = await fetch("/api/prs/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
       if (!response.ok) {
         const problem = await response.json().catch(() => ({}));
         console.warn("閉じた PR を確かめられませんでした", problem.error ?? response.status);
