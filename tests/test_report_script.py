@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -29,6 +30,7 @@ GH_PR_VIEW = {
 NOTIFIERS = ("osascript", "notify-send")
 END_OF_CALL = "-- end of call --"
 SUBTITLE = "acme/web#128 · リスク 中"
+TITLE_TO_KEEP = '-v [WIP] say "done" & <b>quit</b> \\ 終わり'
 
 
 def write_command(bin_dir: Path, name: str, body: str) -> None:
@@ -38,15 +40,23 @@ def write_command(bin_dir: Path, name: str, body: str) -> None:
 
 
 def recorder(tmp_path: Path) -> str:
-    return f'printf "%s\\n" "$(basename "$0")" "$@" "{END_OF_CALL}" >> "{tmp_path / "notified"}"'
+    return (
+        f'printf "%s\\n" "$(basename "$0")" "$@" "$(cat)" "{END_OF_CALL}"'
+        f' >> "{tmp_path / "notified"}"'
+    )
 
 
 def write_commands(tmp_path: Path, gh_body: str) -> Path:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     write_command(bin_dir, "gh", gh_body)
+    write_command(bin_dir, "uname", "echo Linux")
     for name in NOTIFIERS:
         write_command(bin_dir, name, recorder(tmp_path))
+    jq = shutil.which("jq")
+    assert jq is not None
+    (bin_dir / "jq").symlink_to(jq)
+    (bin_dir / "python3").symlink_to(sys.executable)
     return bin_dir
 
 
@@ -82,7 +92,7 @@ def run_script(
     display: str | None = ":0",
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ | {
-        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
         "TORIAGE_HOME": str(home),
     }
     for name, value in (
@@ -244,9 +254,21 @@ def test_does_not_take_the_session_from_the_judgment(
     assert triage.session is None
 
 
+@pytest.mark.parametrize(
+    ("system", "notifier"),
+    [("Darwin", "terminal-notifier"), ("Darwin", "osascript"), ("Linux", "notify-send")],
+)
 def test_notifies_with_the_pr_after_sending(
-    tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
+    tmp_path: Path,
+    port: int,
+    store: TriageStore,
+    report: dict[str, object],
+    fake_gh: Path,
+    system: str,
+    notifier: str,
 ) -> None:
+    write_command(fake_gh, "uname", f"echo {system}")
+    write_command(fake_gh, notifier, recorder(tmp_path))
     judgment = json.dumps(judgment_of(report))
 
     result = run_script(
@@ -256,18 +278,39 @@ def test_notifies_with_the_pr_after_sending(
     assert result.returncode == 0, result.stderr
     record = notified(tmp_path, 5)
     assert record.count(END_OF_CALL) == 1
-    assert SUBTITLE in record
-    assert str(GH_PR_VIEW["title"]) in record
+    calls = record.splitlines()
+    assert calls[0] == notifier
+    assert SUBTITLE in calls
+    assert str(GH_PR_VIEW["title"]) in calls
 
 
-def test_passes_a_title_with_quotes_as_it_is(
-    tmp_path: Path, port: int, store: TriageStore, report: dict[str, object]
+@pytest.mark.parametrize(
+    ("system", "notifier", "shown"),
+    [
+        ("Darwin", "terminal-notifier", TITLE_TO_KEEP),
+        ("Darwin", "osascript", TITLE_TO_KEEP),
+        (
+            "Linux",
+            "notify-send",
+            "-v [WIP] say &quot;done&quot; &amp; &lt;b&gt;quit&lt;/b&gt; \\\\ 終わり",
+        ),
+    ],
+)
+def test_passes_the_title_so_that_it_shows_as_it_is(
+    tmp_path: Path,
+    port: int,
+    store: TriageStore,
+    report: dict[str, object],
+    system: str,
+    notifier: str,
+    shown: str,
 ) -> None:
-    title = 'say "done" & quit \\ 終わり'
-    facts = GH_PR_VIEW | {"title": title}
+    facts = GH_PR_VIEW | {"title": TITLE_TO_KEEP}
     bin_dir = write_commands(
         tmp_path, f"cat <<'JSON'\n{json.dumps(facts, ensure_ascii=False)}\nJSON"
     )
+    write_command(bin_dir, "uname", f"echo {system}")
+    write_command(bin_dir, notifier, recorder(tmp_path))
 
     result = run_script(
         bin_dir,
@@ -279,13 +322,16 @@ def test_passes_a_title_with_quotes_as_it_is(
     )
 
     assert result.returncode == 0, result.stderr
-    assert title in notified(tmp_path, 5).splitlines()
+    calls = notified(tmp_path, 5).splitlines()
+    assert calls[0] == notifier
+    assert shown in calls
+    assert "-message" not in calls
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="terminal-notifier は macOS で使う")
 def test_lets_the_notification_open_the_dashboard_with_terminal_notifier(
     tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
 ) -> None:
+    write_command(fake_gh, "uname", "echo Darwin")
     write_command(fake_gh, "terminal-notifier", recorder(tmp_path))
 
     result = run_script(
@@ -343,7 +389,6 @@ def test_does_not_notify_when_a_newer_report_is_kept(
     assert notified(tmp_path, 1) == ""
 
 
-@pytest.mark.skipif(sys.platform == "darwin", reason="macOS は画面の有無によらず通知センターに出す")
 def test_does_not_notify_without_a_display(
     tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
 ) -> None:
