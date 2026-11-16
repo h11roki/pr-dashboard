@@ -31,7 +31,7 @@ Claude Code や Codex が作った PR の判断材料を受け取り、手元の
 - PR はリポジトリごとにまとめて見せる。見出しは名前の順、スイッチでまとめない表示に戻せる。折りたたみは保存しない(0005)
 - 送信スクリプトは送る前にサーバーと同じ検証をし、届かなかったと分かるときだけ inbox に置く(0006)
 - 判断のボタン(レビュー依頼、差し戻し、保留)は未判断と保留のカードに出す。レビュー依頼はサーバーから `gh` を `-R` 付きで呼び、失敗したら状態を変えない(0007)
-- 差し戻しは PR にコメントせず、報告の `session` の `workdir` で `claude -p --resume <id> --permission-mode auto --permission-prompts none` を裏で起動して理由を渡す。起動できなければ状態を変えない。`session` のない報告には差し戻しを出さない。差し戻しのカードには、やり直し用に差し戻しだけを出す。同じセッションの再開が動いているあいだ(`returns/<id>.pid` のプロセスが、場所と指示を除いて同じ再開のコマンドで動いているあいだ)は断る(0011、0014)
+- 差し戻しは PR にコメントせず、報告の `session` の `workdir` で `claude -p --resume <id> --permission-mode auto --permission-prompts none` を裏で起動して理由を渡す。起動できなければ状態を変えない。`session` のない報告には差し戻しを出さない。差し戻しのカードには、やり直し用に差し戻しだけを出す。同じセッションの再開が動いているあいだ(`returns/<id>.pid` のプロセスが、場所と指示を除いて同じ再開のコマンドで動いているあいだ)は断る。番号を書き残せなければ、起動したプロセスのグループごと止める(0011、0014)
 - 裏で再開する `claude` に渡す PATH から、toriage のプラグインの `bin`(`toriage-report` があり、親に `.claude-plugin/plugin.json` がある)を外す。サーバーが起動したときの古い版の `bin` が先に見つからないようにし、Claude Code が足す今の版を使わせる(0012)
 - 送信スクリプトは、報告が保存されたらダッシュボードをブラウザで開く。開くたびに新しいタブになる。`TORIAGE_OPEN=0` で止める。inbox に保存したときと、置き換えなかったときは開かない(0013)。inbox から取り込んだ報告では開かない
 - Codex でも使う。Codex は `.claude-plugin` のマーケットプレイスとプラグインをそのまま読む。報告の `session.agent`(無ければ `claude`)が `codex` なら、差し戻しは `<codex> exec resume -c sandbox_mode="workspace-write" -c approval_policy="on-request" -c approvals_reviewer="auto_review" <ID> <指示>` で裏で再開する。`codex` は `TORIAGE_CODEX`、PATH、ChatGPT アプリと Codex アプリの中の順に探し、無ければ断る。裏で再開するエージェントには、Claude Code と Codex の両方の会話の環境変数を渡さない。スキルは、`bin` のコマンドが見つからなければ `SKILL.md` から見た `../../bin/` を使う(0014)

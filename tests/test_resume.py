@@ -5,6 +5,7 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -318,14 +319,36 @@ def test_a_pid_left_behind_by_another_process_does_not_block(
             fake_agent.finish()
 
 
-def test_stops_claude_when_it_cannot_record_the_resume(
-    tmp_path: Path, fake_agent: FakeAgent, workdir: Path
+def is_running(pid: int) -> bool:
+    state = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "stat="], capture_output=True, text=True, check=False
+    ).stdout.strip()
+    return state != "" and not state.startswith("Z")
+
+
+def test_stops_the_agent_and_what_it_started_when_it_cannot_record_the_resume(
+    tmp_path: Path, fake_agent: FakeAgent, workdir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    child_pid = tmp_path / "child.pid"
+    wrapper = fake_agent.bin_dir / "claude"
+    wrapper.write_text(
+        f"#!/bin/sh\nsleep 30 &\necho $! > {child_pid}.tmp\nmv {child_pid}.tmp {child_pid}\nwait\n",
+        encoding="utf-8",
+    )
+
+    class PopenAfterTheChildStarts(subprocess.Popen[bytes]):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            wait_until(child_pid.exists)
+
+    monkeypatch.setattr(subprocess, "Popen", PopenAfterTheChildStarts)
     logs = tmp_path / "returns"
     (logs / f"{SESSION_ID}.pid").mkdir(parents=True)
 
     with pytest.raises(ResumeFailed, match="書き残せなかった"):
         resume_in_background(logs)(Session(id=SESSION_ID, workdir=str(workdir)), "直して")
+
+    wait_until(lambda: not is_running(int(child_pid.read_text(encoding="utf-8"))))
 
 
 def test_fails_when_the_workdir_is_gone(tmp_path: Path, fake_agent: FakeAgent) -> None:
