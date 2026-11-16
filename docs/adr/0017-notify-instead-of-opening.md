@@ -19,10 +19,10 @@
 1 にする。高橋さんが選んだ。0013 はこれで置き換える。
 
 - `toriage-report` は、ダッシュボードが報告を保存したと答えたら、ページは開かずに通知を出す。題は `toriage`、小見出しは `<リポジトリ>#<番号> · リスク <低/中/高>`、本文は PR の題
-- macOS は、`terminal-notifier` があればそれを使い、通知を押すとダッシュボードを開く。無ければ `osascript` の `display notification` を使う。この通知は押しても開かない
+- macOS は、`terminal-notifier` があればそれを使い、通知を押すとダッシュボードを開く。同じ PR の前の通知は `-group` で置き換える。無ければ `osascript` の `display notification` を使う。この通知は押しても開かない
 - Linux は、`DISPLAY` か `WAYLAND_DISPLAY` があり、`notify-send` があるときだけ出す。アプリ名を `toriage`、要約を小見出し、本文を PR の題にする
 - 通知の命令は、0013 と同じく `nohup` を付けて裏で動かし、出力は捨て、待たない。出せなくても、送れたので 0 で終わる
-- PR の題は、`osascript` には引数で渡し、AppleScript の文に埋め込まない。`terminal-notifier` には `-message` を使わず標準入力で渡す。`notify-send` には `--` のあとに渡し、マークアップの記号(`&`、`<`、`>`、引用符)と `\` を逃がす
+- PR の題は、`osascript` には引数で渡し、AppleScript の文に埋め込まない。`terminal-notifier` には `-message` を使わず標準入力で渡す。`notify-send` には `--` のあとに渡し、マークアップの記号(`&`、`<`、`>`)と `\` を逃がす。引用符は逃がさなくてもマークアップは壊れないので、そのままにする
 - inbox に保存したとき、もっと新しい報告があって置き換えなかったときは出さない
 - `TORIAGE_NOTIFY` が `0` のときは出さない。0013 の `TORIAGE_OPEN` はなくす
 

@@ -255,48 +255,14 @@ def test_does_not_take_the_session_from_the_judgment(
 
 
 @pytest.mark.parametrize(
-    ("system", "notifier"),
-    [("Darwin", "terminal-notifier"), ("Darwin", "osascript"), ("Linux", "notify-send")],
-)
-def test_notifies_with_the_pr_after_sending(
-    tmp_path: Path,
-    port: int,
-    store: TriageStore,
-    report: dict[str, object],
-    fake_gh: Path,
-    system: str,
-    notifier: str,
-) -> None:
-    write_command(fake_gh, "uname", f"echo {system}")
-    write_command(fake_gh, notifier, recorder(tmp_path))
-    judgment = json.dumps(judgment_of(report))
-
-    result = run_script(
-        fake_gh, judgment, f"http://{HOST}:{port}", tmp_path / "home", "128", notify_setting=None
-    )
-
-    assert result.returncode == 0, result.stderr
-    record = notified(tmp_path, 5)
-    assert record.count(END_OF_CALL) == 1
-    calls = record.splitlines()
-    assert calls[0] == notifier
-    assert SUBTITLE in calls
-    assert str(GH_PR_VIEW["title"]) in calls
-
-
-@pytest.mark.parametrize(
     ("system", "notifier", "shown"),
     [
         ("Darwin", "terminal-notifier", TITLE_TO_KEEP),
         ("Darwin", "osascript", TITLE_TO_KEEP),
-        (
-            "Linux",
-            "notify-send",
-            "-v [WIP] say &quot;done&quot; &amp; &lt;b&gt;quit&lt;/b&gt; \\\\ 終わり",
-        ),
+        ("Linux", "notify-send", '-v [WIP] say "done" &amp; &lt;b&gt;quit&lt;/b&gt; \\\\ 終わり'),
     ],
 )
-def test_passes_the_title_so_that_it_shows_as_it_is(
+def test_notifies_with_the_pr_and_its_title_as_it_is(
     tmp_path: Path,
     port: int,
     store: TriageStore,
@@ -322,13 +288,16 @@ def test_passes_the_title_so_that_it_shows_as_it_is(
     )
 
     assert result.returncode == 0, result.stderr
-    calls = notified(tmp_path, 5).splitlines()
+    record = notified(tmp_path, 5)
+    assert record.count(END_OF_CALL) == 1
+    calls = record.splitlines()
     assert calls[0] == notifier
+    assert SUBTITLE in calls
     assert shown in calls
     assert "-message" not in calls
 
 
-def test_lets_the_notification_open_the_dashboard_with_terminal_notifier(
+def test_lets_terminal_notifier_open_the_dashboard_and_replace_the_last_notice_of_the_pr(
     tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
 ) -> None:
     write_command(fake_gh, "uname", "echo Darwin")
@@ -347,6 +316,7 @@ def test_lets_the_notification_open_the_dashboard_with_terminal_notifier(
     calls = notified(tmp_path, 5).splitlines()
     assert calls[0] == "terminal-notifier"
     assert calls[calls.index("-open") + 1] == f"http://{HOST}:{port}"
+    assert calls[calls.index("-group") + 1] == "acme/web#128"
 
 
 def test_does_not_notify_when_notifying_is_turned_off(
