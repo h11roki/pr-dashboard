@@ -178,6 +178,21 @@ def test_rejects_a_relative_toriage_codex(
     assert not logs.exists()
 
 
+def test_names_toriage_codex_when_the_codex_it_names_cannot_run(
+    tmp_path: Path, fake_agent: FakeAgent, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TORIAGE_CODEX", str(tmp_path / "moved" / "codex"))
+    logs = tmp_path / "returns"
+
+    with pytest.raises(ResumeFailed, match="TORIAGE_CODEX"):
+        resume_in_background(logs)(
+            Session(id=SESSION_ID, workdir=str(workdir), agent=Agent.CODEX), "直してください"
+        )
+
+    assert not fake_agent.calls.exists()
+    assert not logs.exists()
+
+
 @pytest.mark.parametrize("agent", list(Agent))
 def test_does_not_run_an_agent_found_through_a_relative_path_entry(
     tmp_path: Path,

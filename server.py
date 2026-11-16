@@ -572,6 +572,8 @@ def _find_codex(environment: dict[str, str]) -> str:
     if configured:
         if not Path(configured).is_absolute():
             raise ResumeFailed(f"TORIAGE_CODEX は絶対パスで設定する: {configured}")
+        if not (Path(configured).is_file() and os.access(configured, os.X_OK)):
+            raise ResumeFailed(f"TORIAGE_CODEX の {configured} を実行できない")
         return configured
     found = _find_on_path("codex", environment)
     if found:
