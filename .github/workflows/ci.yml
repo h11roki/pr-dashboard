@@ -25,13 +25,13 @@ jobs:
       - run: uv run mypy
       - run: uv run pytest
 
-  test-python-39:
-    runs-on: ubuntu-latest
+  test-macos-python:
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.0
         with:
           enable-cache: true
-      - run: uv sync --python 3.9
-      - run: uv run --python 3.9 python -c "import sys; assert sys.version_info[:2] == (3, 9), sys.version"
-      - run: uv run --python 3.9 pytest
+      - run: uv sync --python /usr/bin/python3
+      - run: uv run --python /usr/bin/python3 python -c "import sys; assert sys.version_info[:2] == (3, 9), sys.version"
+      - run: uv run --python /usr/bin/python3 pytest

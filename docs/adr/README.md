@@ -44,7 +44,7 @@
 | [0003](0003-refuse-foreign-requests.md) | サーバーは Host、Origin、Content-Type を確かめ、ほかのサイトからの要求を断る | 提案 |
 | [0004](0004-shadcn-look-in-plain-css.md) | 画面の見た目は shadcn/ui に合わせ、React を使わずに CSS で写す | 承認 |
 | [0005](0005-group-by-project.md) | PR はリポジトリごとにまとめて見せ、スイッチでまとめない表示に戻せるようにする | 承認 |
-| [0006](0006-report-script-failures.md) | 送信スクリプトは送る前にサーバーと同じ検証をし、届かなかったと分かるときだけ inbox に置く | 承認 |
+| [0006](0006-report-script-failures.md) | 送信スクリプトは送る前にサーバーと同じ検証をし、届かなかったと分かるときだけ inbox に置く | 承認(Python の版は 0019 で置き換え) |
 | [0007](0007-decision-buttons.md) | 判断のボタンはサーバーから gh を -R 付きで呼び、失敗したら判断の状態を変えない | 承認(差し戻しは 0011 で置き換え) |
 | [0008](0008-claude-code-plugin.md) | Claude Code のプラグインとして配り、Claude Code を開いたときにダッシュボードを起動する | 承認(GitHub のアカウントは 0018、Python の版は 0019 で置き換え) |
 | [0009](0009-name-toriage.md) | 名前を toriage にする | 承認 |

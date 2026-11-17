@@ -23,10 +23,10 @@
 
 - 動かす Python の下限を 3.9 にする。`libexec/toriage-python` は 3.9 以上の `python3` を使い、無ければ uv の Python を使う
 - サーバーとテストは 3.9 で動く書き方にする。`match` 文、`StrEnum`、`assert_never`、`datetime.UTC`、型引数の構文(`def f[T]`)、実行時に評価される `X | None` を使わない
-- どのファイルも `from __future__ import annotations` で始め、注釈の `X | None` は 3.9 でも評価されないようにする。実行時に評価する型の別名には `Optional` を使う
+- どのファイルも `from __future__ import annotations` で始め(ruff の required-imports で強制する)、注釈の `X | None` は 3.9 でも評価されないようにする。実行時に評価する型の別名には `Optional` を使う
 - 3.9 では、本文を読むときの時間切れが `TimeoutError` ではなく `socket.timeout` で届く(3.10 で同じものになった)。両方を拾う
 - ruff の `target-version` を py39 にし、3.9 で使えない構文を見つける。mypy は 3.9 を検査できない(3.10 以上しか受け付けない)ので 3.10 で検査する。3.9 で本当に動くかは、CI で 3.9 のテストを回して確かめる
-- CI は、3.13 で lint、型検査、テストを回し、3.9 でもテストを回す。開発の道具は 3.13 で動かし、3.9 のテストには 3.9 に対応する pytest を使う
+- CI は、Linux の 3.13 で lint、型検査、テストを回し、macOS の `/usr/bin/python3`(3.9.6)でもテストを回す。開発の道具は 3.13 で動かし、3.9 のテストには 3.9 に対応する pytest を使う
 - 送信スクリプトと起動スクリプトを Python にして、`jq` と `curl` を要らなくする。これは次の PR で行う
 
 ## 理由

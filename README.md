@@ -154,7 +154,7 @@ Codex では `codex plugin marketplace upgrade h11roki` と `codex plugin add to
 ```sh
 uv sync
 uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest
-UV_PROJECT_ENVIRONMENT=.venv-3.9 uv run --python 3.9 pytest
+UV_PROJECT_ENVIRONMENT=.venv-3.9 uv run --python /usr/bin/python3 pytest
 ```
 
 手元のコードを試すときは `claude --plugin-dir .` で Claude Code を開きます。サーバーだけなら `python3 server.py` で起動できます。
