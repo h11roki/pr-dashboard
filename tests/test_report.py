@@ -29,6 +29,12 @@ def test_keeps_the_account_that_reported_the_pr(report: dict[str, object]) -> No
     assert parse_report(report).account == "acme-bot"
 
 
+def test_accepts_an_account_managed_by_an_enterprise(report: dict[str, object]) -> None:
+    report["account"] = "octocat_acme"
+
+    assert parse_report(report).account == "octocat_acme"
+
+
 def test_account_may_be_left_out(report: dict[str, object]) -> None:
     del report["account"]
 
@@ -116,7 +122,7 @@ def test_rejects_a_missing_field(report: dict[str, object]) -> None:
         ("tests", {"status": "skipped", "detail": ""}, "status"),
         ("account", "--user", "account"),
         ("account", "acme/bot", "account"),
-        ("account", "a" * 40, "account"),
+        ("account", "acme bot", "account"),
         ("account", 7, "account"),
     ],
 )

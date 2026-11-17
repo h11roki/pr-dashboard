@@ -194,6 +194,19 @@ def test_a_stored_session_that_no_longer_passes_is_left_out(
     assert Action.RETURN not in triage.actions
 
 
+def test_a_stored_account_that_no_longer_passes_is_left_out(
+    tmp_path: Path, store: TriageStore, report: dict[str, object]
+) -> None:
+    save_pending(store, report | {"account": "acme-bot"})
+    with closing(sqlite3.connect(tmp_path / "prs.db")) as old, old:
+        old.execute("UPDATE prs SET payload = json_set(payload, '$.account', '--hostname=x')")
+
+    [triage] = store.list_triages()
+    [open_pr] = store.open_pull_requests()
+
+    assert (triage.account, open_pr.account) == (None, None)
+
+
 @pytest.mark.parametrize(
     ("failure", "expected"),
     [

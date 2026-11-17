@@ -319,6 +319,7 @@ def write_gh_logged_in_as(tmp_path: Path, account: str) -> Path:
     gh.write_text(
         "#!/usr/bin/env bash\n"
         'if [ "$1 $2" = "auth token" ]; then\n'
+        f'  echo "$4" >> "{tmp_path / "lookups"}"\n'
         f'  [ "$4" = {account} ] || {{ echo "no oauth token found for $4" >&2; exit 1; }}\n'
         f"  echo token-of-{account}; exit 0\n"
         "fi\n"
@@ -363,3 +364,15 @@ def test_still_checks_the_other_accounts_when_gh_is_not_logged_in_as_one(
 
     assert states == {("acme/api", 2): "MERGED"}
     assert "acme-dev でログインしていない" in capsys.readouterr().err
+
+
+def test_looks_up_the_token_of_an_account_once_for_all_its_queries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PATH", f"{write_gh_logged_in_as(tmp_path, 'acme-bot')}:/usr/bin:/bin")
+    monkeypatch.setattr(server, "STATES_PER_QUERY", 1)
+
+    pull_request_states([("acme/web", 1, "acme-bot"), ("acme/web", 2, "acme-bot")])
+
+    assert (tmp_path / "lookups").read_text(encoding="utf-8").splitlines() == ["acme-bot"]
+    assert len((tmp_path / "queries").read_text(encoding="utf-8").splitlines()) == 2

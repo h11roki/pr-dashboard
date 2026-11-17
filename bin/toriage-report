@@ -29,6 +29,9 @@ jq -e -s 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1 <<<"$judgme
 facts="$(gh pr view "$1" --json number,url,title,headRefName,additions,deletions,changedFiles)" ||
   fail "gh で PR $1 を読めなかった"
 account="$(gh api user --jq .login 2>/dev/null)" || account=""
+if [ -n "$account" ] && ! gh auth token --user "$account" >/dev/null 2>&1; then
+  account=""
+fi
 
 branch="$(git branch --show-current 2>/dev/null)" || branch=""
 workdir="$(git rev-parse --show-toplevel 2>/dev/null)" || workdir=""

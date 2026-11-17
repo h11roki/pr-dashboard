@@ -47,11 +47,19 @@ def recorder(tmp_path: Path) -> str:
     )
 
 
-def write_commands(tmp_path: Path, gh_body: str, login: str | None = ACCOUNT) -> Path:
+def write_commands(
+    tmp_path: Path, gh_body: str, login: str | None = ACCOUNT, keychain: str = ACCOUNT
+) -> Path:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     who = "exit 1" if login is None else f"echo {login}; exit 0"
-    write_command(bin_dir, "gh", f'if [ "$1 $2" = "api user" ]; then {who}; fi\n{gh_body}')
+    write_command(
+        bin_dir,
+        "gh",
+        f'if [ "$1 $2" = "api user" ]; then {who}; fi\n'
+        f'if [ "$1 $2" = "auth token" ]; then [ "$4" = {keychain} ] && echo token; exit; fi\n'
+        f"{gh_body}",
+    )
     write_command(bin_dir, "uname", "echo Linux")
     for name in NOTIFIERS:
         write_command(bin_dir, name, recorder(tmp_path))
@@ -146,6 +154,22 @@ def test_does_not_take_the_account_from_the_judgment(
     assert result.returncode == 0, result.stderr
     [triage] = store.list_triages()
     assert triage.account == ACCOUNT
+
+
+def test_sends_without_an_account_that_gh_has_no_login_for(
+    tmp_path: Path, port: int, store: TriageStore, report: dict[str, object]
+) -> None:
+    bin_dir = write_commands(
+        tmp_path, f"echo '{json.dumps(GH_PR_VIEW, ensure_ascii=False)}'", keychain="acme-dev"
+    )
+
+    result = run_script(
+        bin_dir, json.dumps(judgment_of(report)), f"http://{HOST}:{port}", tmp_path / "home", "128"
+    )
+
+    assert result.returncode == 0, result.stderr
+    [triage] = store.list_triages()
+    assert triage.account is None
 
 
 def test_sends_without_an_account_when_gh_cannot_tell_who_it_is(
