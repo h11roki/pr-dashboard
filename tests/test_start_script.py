@@ -95,4 +95,4 @@ def test_says_where_to_look_when_the_dashboard_cannot_start(
     assert result.returncode == 1
     assert str(dashboard_home / "server.log") in result.stderr
     log = (dashboard_home / "server.log").read_text(encoding="utf-8")
-    assert "3.13 以上か uv が要る" in log
+    assert "3.9 以上か uv が要る" in log

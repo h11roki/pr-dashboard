@@ -7,7 +7,7 @@ Claude Code や Codex が作った PR の判断材料を受け取り、手元の
 - 起動: `bin/toriage-start`(裏で起動してつながるまで待つ。何度呼んでも 1 つ。`--restart` で起動し直す)。前で動かすなら `python3 server.py`。どちらも `http://127.0.0.1:8787`
 - プラグインとして試す: `claude --plugin-dir .`、検証は `claude plugin validate .`
 - `uv sync`
-- `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest`(CI と同じ)
+- `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest` と、3.9 のテスト `UV_PROJECT_ENVIRONMENT=.venv-3.9 uv run --python 3.9 pytest`(CI と同じ。3.9 の環境は `.venv` と分けないと、mypy の無い 3.9 の環境に作り直される)
 
 ## 構成
 

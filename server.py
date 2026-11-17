@@ -19,7 +19,7 @@ from enum import Enum
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Optional, TypeVar
+from typing import NoReturn, Optional, TypeVar
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent
@@ -357,9 +357,10 @@ def _session_or_none(value: object) -> Session | None:
         return None
     if not isinstance(workdir, str) or not Path(workdir).is_absolute() or "\0" in workdir:
         return None
-    if not isinstance(agent, str) or agent not in {member.value for member in Agent}:
+    try:
+        return Session(id=session_id, workdir=workdir, agent=Agent(agent))
+    except ValueError:
         return None
-    return Session(id=session_id, workdir=workdir, agent=Agent(agent))
 
 
 def _stored_account(report: object) -> str | None:
@@ -720,25 +721,27 @@ def _resume_environment(workdir: str) -> dict[str, str]:
 
 
 def _resume_command(session: Session, environment: dict[str, str]) -> list[str]:
+    if session.agent is Agent.CLAUDE:
+        claude = _find_on_path("claude", environment)
+        if claude is None:
+            raise ResumeFailed(
+                "claude が見つからない。Claude Code の claude がある場所を PATH に入れて、"
+                "ダッシュボードを起動し直す"
+            )
+        return [
+            claude,
+            "-p",
+            "--resume",
+            session.id,
+            "--permission-mode",
+            "auto",
+            "--permission-prompts",
+            "none",
+        ]
     if session.agent is Agent.CODEX:
         codex = _find_codex(environment)
         return [codex, "exec", "resume", *CODEX_RESUME_SETTINGS, session.id]
-    claude = _find_on_path("claude", environment)
-    if claude is None:
-        raise ResumeFailed(
-            "claude が見つからない。Claude Code の claude がある場所を PATH に入れて、"
-            "ダッシュボードを起動し直す"
-        )
-    return [
-        claude,
-        "-p",
-        "--resume",
-        session.id,
-        "--permission-mode",
-        "auto",
-        "--permission-prompts",
-        "none",
-    ]
+    _unreachable(session.agent)
 
 
 def _find_codex(environment: dict[str, str]) -> str:
@@ -785,6 +788,10 @@ def _still_resuming(marker: Path, command: list[str]) -> bool:
     except (OSError, ValueError):
         return False
     return " ".join(command[1:]) in running
+
+
+def _unreachable(value: NoReturn) -> NoReturn:
+    raise AssertionError(f"想定していない値: {value!r}")
 
 
 def _now() -> str:
@@ -842,8 +849,10 @@ def decide(
         url = pull_request_url(triage.repo, triage.number)
         resume(triage.session, RETURN_PROMPT.format(url=url, reason=request.reason), triage.account)
         status, note = "returned", request.reason
-    else:
+    elif action is Action.HOLD:
         status, note = "on_hold", None
+    else:
+        _unreachable(action)
     recorded, report_changed = store.decide(triage, status, note, datetime.now(timezone.utc))
     if not recorded:
         raise AlreadyDecided("反映はしたが、そのあいだに状態が変わったので記録していない")

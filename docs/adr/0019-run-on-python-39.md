@@ -8,7 +8,7 @@
 - 0001 で、標準ライブラリだけの Python で作ると決めた。`libexec/toriage-python` は 3.13 以上の `python3` を使い、無ければ uv の 3.13 を使う
 - 高橋さんは、言語は得意不得意ではなく使う人の使い心地で選びたいと言い、Rust を挙げた
 - 測ると、Python の起動は 48 ms、送る前の確認は 93 ms、サーバーのメモリは 16 MB だった。速さとメモリは使い心地に効かない。効くのは、入れたらすぐ動くか
-- macOS(26.6 で確かめた)には、`/usr/bin/python3`(3.9.6)、`jq`、`curl` が最初から入っている。`python3` は git と同じ Command Line Tools に入っているので、git を使える Mac にはある。足りないのは Python 3.13 だけで、Homebrew の Python も uv も無いと、入れた直後に動かない
+- macOS(26.6 で確かめた)には、`/usr/bin/python3`(3.9.6)、`jq`、`curl` が最初から入っている(`jq` は macOS 15 から)。`python3` は git と同じ Command Line Tools に入っているので、git を使える Mac にはある。足りないのは Python 3.13 だけで、Homebrew の Python も uv も無いと、入れた直後に動かない
 - Linux は、`python3` と `curl` はたいていあるが、`jq` は入っていないことが多い
 
 ## 検討した選択肢
@@ -39,7 +39,9 @@
 ## 受け入れたトレードオフ
 
 - Python 3.9 は 2025 年 10 月にサポートが終わっている。Apple が macOS に入れ続けているあいだは、動かす先としていちばん確実なので使う
-- `match` 文や `StrEnum` を使えず、書き方が古くなる。3.9 では、Enum に値で `in` を使うと TypeError になるので、値の集合で確かめる
+- `match` 文や `StrEnum` を使えず、書き方が古くなる。`assert_never` の代わりに、引数を `NoReturn` にした関数で、Enum の値の抜けを mypy に見つけさせる。3.9 では、Enum に値で `in` を使うと TypeError になるので、`Agent(値)` が通るかで確かめる
+- mypy は 3.10 の標準ライブラリで検査するので、3.10 以降にしかない関数や引数(`zip(strict=)` など)を使っても見つからない。3.9 のテストが通らない道で使うと、3.9 で動かしたときに初めて分かる
+- `jq` が最初から入っているのは macOS 15 以降。それより前の macOS では、次の PR で送信スクリプトを Python にするまで `jq` を入れる必要がある
 - Windows は Python が最初から入っていないので、今までどおり対象にしない
 - Command Line Tools の無い Mac では、`python3` を呼ぶと入れるよう促される。git も同じなので、開発に使う Mac では起きにくい
 
