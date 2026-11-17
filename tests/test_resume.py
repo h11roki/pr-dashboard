@@ -502,6 +502,19 @@ def test_leaves_github_to_the_active_account_when_the_report_has_no_account(
     assert fake_agent.call()["gh_token"] is None
 
 
+def test_says_the_session_is_still_busy_before_asking_gh_for_the_token(
+    tmp_path: Path, fake_agent: FakeAgent, workdir: Path
+) -> None:
+    install_gh_logged_in_as(fake_agent.bin_dir, "acme-bot")
+    resume = resume_in_background(tmp_path / "returns")
+    session = Session(id=SESSION_ID, workdir=str(workdir))
+    resume(session, "直してください", "acme-bot")
+    fake_agent.call()
+
+    with pytest.raises(SessionBusy, match="まだ直している"):
+        resume(session, "もう一度", "acme-dev")
+
+
 def test_does_not_resume_when_gh_is_not_logged_in_as_the_account(
     tmp_path: Path, fake_agent: FakeAgent, workdir: Path
 ) -> None:

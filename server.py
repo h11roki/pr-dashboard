@@ -139,8 +139,7 @@ WHERE id = ?
 """
 
 SELECT_OPEN = """
-SELECT id, repo, number, received_at, json_extract(payload, '$.account') AS account FROM prs
-WHERE closed IS NULL
+SELECT id, repo, number, received_at, payload FROM prs WHERE closed IS NULL
 """
 
 MARK_CLOSED = """
@@ -359,8 +358,9 @@ def _session_or_none(value: object) -> Session | None:
     return Session(id=session_id, workdir=workdir, agent=Agent(agent))
 
 
-def _account_or_none(value: object) -> str | None:
-    return value if isinstance(value, str) and ACCOUNT_PATTERN.fullmatch(value) else None
+def _stored_account(report: object) -> str | None:
+    account = report.get("account") if isinstance(report, dict) else None
+    return account if isinstance(account, str) and ACCOUNT_PATTERN.fullmatch(account) else None
 
 
 def pull_request_url(repo: str, number: int) -> str:
@@ -389,8 +389,10 @@ def parse_report(raw: object) -> Report:
     reviewers = _texts(raw, "suggested_reviewers")
     if not all(REVIEWER_PATTERN.fullmatch(reviewer) for reviewer in reviewers):
         raise InvalidReport("suggested_reviewers は GitHub のユーザー名か org/team で指定する")
-    account = _account_or_none(raw.get("account"))
-    if account is None and raw.get("account") is not None:
+    account = raw.get("account")
+    if account is not None and not (
+        isinstance(account, str) and ACCOUNT_PATTERN.fullmatch(account)
+    ):
         raise InvalidReport("account は null か GitHub のユーザー名で指定する")
     changes = _field(raw, "changes", dict)
     tests = _field(raw, "tests", dict)
@@ -461,7 +463,7 @@ class TriageStore:
                 repo=row["repo"],
                 number=row["number"],
                 received_at=row["received_at"],
-                account=_account_or_none(row["account"]),
+                account=_stored_account(json.loads(row["payload"])),
             )
             for row in rows
         ]
@@ -491,7 +493,6 @@ class TriageStore:
         report = json.loads(row["payload"])
         stored = report.get("suggested_reviewers") if isinstance(report, dict) else None
         session = _session_or_none(report.get("session") if isinstance(report, dict) else None)
-        account = _account_or_none(report.get("account") if isinstance(report, dict) else None)
         return Triage(
             id=row["id"],
             repo=row["repo"],
@@ -508,7 +509,7 @@ class TriageStore:
                 if isinstance(name, str) and REVIEWER_PATTERN.fullmatch(name)
             ),
             session=session,
-            account=account,
+            account=_stored_account(report),
             actions=tuple(
                 action
                 for action in ALLOWED_ACTIONS.get(row["status"], ())
@@ -551,7 +552,9 @@ def _gh(arguments: list[str], stdin: str, token: str | None) -> subprocess.Compl
         raise GhFailed(f"gh を実行できなかった: {error}") from error
 
 
-def _token_of(account: str) -> str:
+def _token_of(account: str | None) -> str | None:
+    if account is None:
+        return None
     completed = _gh(["auth", "token", "--user", account], "", None)
     token = completed.stdout.strip()
     if completed.returncode != 0 or not token:
@@ -560,7 +563,7 @@ def _token_of(account: str) -> str:
 
 
 def run_gh(arguments: list[str], stdin: str, account: str | None) -> None:
-    token = None if account is None else _token_of(account)
+    token = _token_of(account)
     try:
         completed = _gh(arguments, stdin, token)
     except GhTimedOut as error:
@@ -580,7 +583,7 @@ def pull_request_states(
     answered = False
     for account, asked in by_account.items():
         try:
-            token = None if account is None else _token_of(account)
+            token = _token_of(account)
         except GhFailed as error:
             failures.append(error)
             continue
@@ -656,14 +659,15 @@ def resume_in_background(logs: Path) -> ResumeSession:
         if not Path(session.workdir).is_dir():
             raise ResumeFailed(f"PR を作った場所 {session.workdir} がもうない")
         environment = _resume_environment(session.workdir)
-        if account is not None:
-            environment["GH_TOKEN"] = _token_of(account)
         command = _resume_command(session, environment)
         log = logs / f"{session.id}.log"
         marker = logs / f"{session.id}.pid"
         with lock:
             if _still_resuming(marker, command):
                 raise SessionBusy("この会話は前の差し戻しをまだ直している。終わってから差し戻す")
+            token = _token_of(account)
+            if token is not None:
+                environment["GH_TOKEN"] = token
             try:
                 logs.mkdir(parents=True, exist_ok=True)
                 with log.open("a", encoding="utf-8") as output:
