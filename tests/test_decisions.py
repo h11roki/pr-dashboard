@@ -1,6 +1,5 @@
 import json
 import sqlite3
-from collections.abc import Callable
 from contextlib import closing
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -17,6 +16,7 @@ from server import (
     DecisionRequest,
     ResumeFailed,
     ResumeSession,
+    RunGh,
     Session,
     SessionBusy,
     Triage,
@@ -25,8 +25,8 @@ from server import (
     parse_report,
 )
 
-GhCalls = list[tuple[list[str], str]]
-Resumed = list[tuple[Session, str]]
+GhCalls = list[tuple[list[str], str, str | None]]
+Resumed = list[tuple[Session, str, str | None]]
 SESSION = Session(id="0f8fad5b-d9cb-469f-a165-70867728950e", workdir="/work/web")
 
 
@@ -75,7 +75,7 @@ def test_requesting_a_review_marks_the_pr_ready(
     status, body = post_decision(port, triage, "request-review")
 
     assert (status, body) == (200, {"status": "requested", "warning": ""})
-    assert gh_calls == [(["pr", "ready", "128", "-R", "acme/web"], "")]
+    assert gh_calls == [(["pr", "ready", "128", "-R", "acme/web"], "", None)]
     assert status_of(store, triage) == "requested"
 
 
@@ -89,7 +89,18 @@ def test_requesting_a_review_adds_the_suggested_reviewers(
     assert gh_calls[1] == (
         ["pr", "edit", "128", "-R", "acme/web", "--add-reviewer", "alice,acme/core"],
         "",
+        None,
     )
+
+
+def test_acts_on_github_as_the_account_that_reported_the_pr(
+    port: int, store: TriageStore, report: dict[str, object], gh_calls: GhCalls
+) -> None:
+    triage = save_pending(store, report | {"account": "acme-bot", "suggested_reviewers": ["alice"]})
+
+    post_decision(port, triage, "request-review")
+
+    assert [account for _, _, account in gh_calls] == ["acme-bot", "acme-bot"]
 
 
 def test_a_reviewer_that_cannot_be_added_only_warns(
@@ -132,8 +143,9 @@ def test_returning_a_pr_hands_the_reason_to_the_session_that_made_it(
 
     assert status == 200
     assert gh_calls == []
-    [(session, prompt)] = resumed
+    [(session, prompt, account)] = resumed
     assert session == SESSION
+    assert account is None
     assert "https://github.com/acme/web/pull/128" in prompt
     assert "テストが足りない" in prompt
     assert "toriage:report" in prompt
@@ -182,6 +194,19 @@ def test_a_stored_session_that_no_longer_passes_is_left_out(
     assert Action.RETURN not in triage.actions
 
 
+def test_a_stored_account_that_no_longer_passes_is_left_out(
+    tmp_path: Path, store: TriageStore, report: dict[str, object]
+) -> None:
+    save_pending(store, report | {"account": "acme-bot"})
+    with closing(sqlite3.connect(tmp_path / "prs.db")) as old, old:
+        old.execute("UPDATE prs SET payload = json_set(payload, '$.account', '--hostname=x')")
+
+    [triage] = store.list_triages()
+    [open_pr] = store.open_pull_requests()
+
+    assert (triage.account, open_pr.account) == (None, None)
+
+
 @pytest.mark.parametrize(
     ("failure", "expected"),
     [
@@ -218,10 +243,20 @@ def test_a_returned_pr_can_be_returned_again_when_the_session_stopped(
 
     assert returned.actions == (Action.RETURN,)
     assert status == 200
-    assert [prompt for _, prompt in resumed][-1].count("もう一度直して") == 1
+    assert [prompt for _, prompt, _ in resumed][-1].count("もう一度直して") == 1
     found = store.find(triage.id)
     assert found is not None
     assert (found.status, found.note) == ("returned", "もう一度直して")
+
+
+def test_returns_a_pr_to_its_session_as_the_account_that_reported_it(
+    port: int, store: TriageStore, report: dict[str, object], resumed: Resumed
+) -> None:
+    triage = save_pending(store, from_a_session(report) | {"account": "acme-bot"})
+
+    post_decision(port, triage, "return", "テストが足りない")
+
+    assert [account for _, _, account in resumed] == ["acme-bot"]
 
 
 def test_holding_changes_only_the_status_and_can_be_decided_later(
@@ -335,11 +370,13 @@ def test_a_decision_from_another_site_is_refused(
 def test_a_report_that_arrives_while_returning_is_recorded_with_a_warning(
     store: TriageStore,
     report: dict[str, object],
-    recording_gh: Callable[[list[str], str], None],
+    recording_gh: RunGh,
 ) -> None:
     triage = save_pending(store, from_a_session(report))
 
-    def resume_while_a_new_report_arrives(session: Session, prompt: str) -> None:
+    def resume_while_a_new_report_arrives(
+        session: Session, prompt: str, account: str | None
+    ) -> None:
         store.save(
             parse_report(from_a_session(report) | {"title": "直した題"}),
             datetime.now(UTC) + timedelta(seconds=1),

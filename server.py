@@ -28,6 +28,7 @@ MAX_SUMMARY_LINES = 3
 MAX_INTEGER = 2**31 - 1
 REPO_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/(?!\.{1,2}$)[A-Za-z0-9._][A-Za-z0-9._-]*")
 REVIEWER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)?")
+ACCOUNT_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 SESSION_ID_PATTERN = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 RISKS = ("low", "medium", "high")
 TEST_STATUSES = ("passed", "failed", "not_run")
@@ -138,7 +139,7 @@ WHERE id = ?
 """
 
 SELECT_OPEN = """
-SELECT id, repo, number, received_at FROM prs WHERE closed IS NULL
+SELECT id, repo, number, received_at, payload FROM prs WHERE closed IS NULL
 """
 
 MARK_CLOSED = """
@@ -153,8 +154,8 @@ UPDATE_DECISION = """
 UPDATE prs SET status = ?, note = ?, decided_at = ? WHERE id = ?
 """
 
-RunGh = Callable[[list[str], str], None]
-FetchStates = Callable[[list[tuple[str, int]]], dict[tuple[str, int], str]]
+RunGh = Callable[[list[str], str, str | None], None]
+FetchStates = Callable[[list[tuple[str, int, str | None]]], dict[tuple[str, int], str]]
 
 
 class Action(StrEnum):
@@ -250,7 +251,7 @@ class Session:
     agent: Agent = Agent.CLAUDE
 
 
-ResumeSession = Callable[[Session, str], None]
+ResumeSession = Callable[[Session, str, str | None], None]
 
 
 @dataclass(frozen=True)
@@ -270,6 +271,7 @@ class Report:
     suggested_reviewers: tuple[str, ...]
     artifact_url: str | None
     session: Session | None
+    account: str | None
 
 
 @dataclass(frozen=True)
@@ -278,6 +280,7 @@ class OpenPullRequest:
     repo: str
     number: int
     received_at: str
+    account: str | None
 
 
 @dataclass(frozen=True)
@@ -293,6 +296,7 @@ class Triage:
     report: object
     reviewers: tuple[str, ...]
     session: Session | None
+    account: str | None
     actions: tuple[Action, ...]
 
 
@@ -354,6 +358,11 @@ def _session_or_none(value: object) -> Session | None:
     return Session(id=session_id, workdir=workdir, agent=Agent(agent))
 
 
+def _stored_account(report: object) -> str | None:
+    account = report.get("account") if isinstance(report, dict) else None
+    return account if isinstance(account, str) and ACCOUNT_PATTERN.fullmatch(account) else None
+
+
 def pull_request_url(repo: str, number: int) -> str:
     return f"https://github.com/{repo}/pull/{number}"
 
@@ -380,6 +389,11 @@ def parse_report(raw: object) -> Report:
     reviewers = _texts(raw, "suggested_reviewers")
     if not all(REVIEWER_PATTERN.fullmatch(reviewer) for reviewer in reviewers):
         raise InvalidReport("suggested_reviewers は GitHub のユーザー名か org/team で指定する")
+    account = raw.get("account")
+    if account is not None and not (
+        isinstance(account, str) and ACCOUNT_PATTERN.fullmatch(account)
+    ):
+        raise InvalidReport("account は null か GitHub のユーザー名で指定する")
     changes = _field(raw, "changes", dict)
     tests = _field(raw, "tests", dict)
     return Report(
@@ -405,6 +419,7 @@ def parse_report(raw: object) -> Report:
         suggested_reviewers=reviewers,
         artifact_url=None if raw.get("artifact_url") is None else _https_url(raw, "artifact_url"),
         session=_session_or_none(raw.get("session")),
+        account=account,
     )
 
 
@@ -444,7 +459,11 @@ class TriageStore:
             rows = self._connection.execute(SELECT_OPEN).fetchall()
         return [
             OpenPullRequest(
-                id=row["id"], repo=row["repo"], number=row["number"], received_at=row["received_at"]
+                id=row["id"],
+                repo=row["repo"],
+                number=row["number"],
+                received_at=row["received_at"],
+                account=_stored_account(json.loads(row["payload"])),
             )
             for row in rows
         ]
@@ -490,6 +509,7 @@ class TriageStore:
                 if isinstance(name, str) and REVIEWER_PATTERN.fullmatch(name)
             ),
             session=session,
+            account=_stored_account(report),
             actions=tuple(
                 action
                 for action in ALLOWED_ACTIONS.get(row["status"], ())
@@ -514,11 +534,13 @@ def parse_body(body: bytes) -> Report:
     return parse_report(load_json(body, InvalidReport))
 
 
-def _gh(arguments: list[str], stdin: str) -> subprocess.CompletedProcess[str]:
+def _gh(arguments: list[str], stdin: str, token: str | None) -> subprocess.CompletedProcess[str]:
+    environment = None if token is None else {**os.environ, "GH_TOKEN": token}
     try:
         return subprocess.run(
             ["gh", *arguments],
             input=stdin,
+            env=environment,
             capture_output=True,
             text=True,
             timeout=GH_TIMEOUT_SECONDS,
@@ -530,32 +552,61 @@ def _gh(arguments: list[str], stdin: str) -> subprocess.CompletedProcess[str]:
         raise GhFailed(f"gh を実行できなかった: {error}") from error
 
 
-def run_gh(arguments: list[str], stdin: str) -> None:
+def _token_of(account: str | None) -> str | None:
+    if account is None:
+        return None
+    completed = _gh(["auth", "token", "--user", account], "", None)
+    token = completed.stdout.strip()
+    if completed.returncode != 0 or not token:
+        detail = completed.stderr.strip() or f"終了コード {completed.returncode}"
+        raise GhFailed(
+            f"gh で {account} のトークンを取れなかった({detail})。"
+            f"{account} で gh auth login しているか確かめる"
+        )
+    return token
+
+
+def run_gh(arguments: list[str], stdin: str, account: str | None) -> None:
+    token = _token_of(account)
     try:
-        completed = _gh(arguments, stdin)
+        completed = _gh(arguments, stdin, token)
     except GhTimedOut as error:
         raise GhFailed(f"{error}。どうなったかは GitHub で確かめる") from error
     if completed.returncode != 0:
         raise GhFailed(completed.stderr.strip() or f"gh が {completed.returncode} で終わった")
 
 
-def pull_request_states(pull_requests: list[tuple[str, int]]) -> dict[tuple[str, int], str]:
+def pull_request_states(
+    pull_requests: list[tuple[str, int, str | None]],
+) -> dict[tuple[str, int], str]:
+    by_account: dict[str | None, list[tuple[str, int]]] = {}
+    for repo, number, account in pull_requests:
+        by_account.setdefault(account, []).append((repo, number))
     states = {}
     failures = []
-    starts = range(0, len(pull_requests), STATES_PER_QUERY)
-    for start in starts:
+    answered = False
+    for account, asked in by_account.items():
         try:
-            states.update(_query_states(pull_requests[start : start + STATES_PER_QUERY]))
+            token = _token_of(account)
         except GhFailed as error:
             failures.append(error)
-    if failures and len(failures) == len(starts):
+            continue
+        for start in range(0, len(asked), STATES_PER_QUERY):
+            try:
+                states.update(_query_states(asked[start : start + STATES_PER_QUERY], token))
+                answered = True
+            except GhFailed as error:
+                failures.append(error)
+    if failures and not answered:
         raise failures[0]
     for failure in failures:
         print(f"{_now()} PR の状態を一部確かめられなかった: {failure}", file=sys.stderr)
     return states
 
 
-def _query_states(pull_requests: list[tuple[str, int]]) -> dict[tuple[str, int], str]:
+def _query_states(
+    pull_requests: list[tuple[str, int]], token: str | None
+) -> dict[tuple[str, int], str]:
     fields = []
     for index, (repo, number) in enumerate(pull_requests):
         owner, name = repo.split("/", 1)
@@ -563,7 +614,7 @@ def _query_states(pull_requests: list[tuple[str, int]]) -> dict[tuple[str, int],
             f"p{index}: repository(owner: {json.dumps(owner)}, name: {json.dumps(name)})"
             f" {{ pullRequest(number: {number}) {{ state }} }}"
         )
-    completed = _gh(["api", "graphql", "-f", f"query=query {{ {' '.join(fields)} }}"], "")
+    completed = _gh(["api", "graphql", "-f", f"query=query {{ {' '.join(fields)} }}"], "", token)
     try:
         data = json.loads(completed.stdout)["data"]
     except (ValueError, KeyError, TypeError) as error:
@@ -588,7 +639,7 @@ def sync_closed(store: TriageStore, fetch_states: FetchStates) -> int:
     open_prs = store.open_pull_requests()
     if not open_prs:
         return 0
-    states = fetch_states([(found.repo, found.number) for found in open_prs])
+    states = fetch_states([(found.repo, found.number, found.account) for found in open_prs])
     closed = {}
     for found in open_prs:
         state = states.get((found.repo, found.number))
@@ -608,7 +659,7 @@ def resume_in_background(logs: Path) -> ResumeSession:
             if marker.read_text(encoding="utf-8").strip() == str(process.pid):
                 marker.unlink()
 
-    def resume(session: Session, prompt: str) -> None:
+    def resume(session: Session, prompt: str, account: str | None) -> None:
         if not Path(session.workdir).is_dir():
             raise ResumeFailed(f"PR を作った場所 {session.workdir} がもうない")
         environment = _resume_environment(session.workdir)
@@ -618,6 +669,9 @@ def resume_in_background(logs: Path) -> ResumeSession:
         with lock:
             if _still_resuming(marker, command):
                 raise SessionBusy("この会話は前の差し戻しをまだ直している。終わってから差し戻す")
+            token = _token_of(account)
+            if token is not None:
+                environment["GH_TOKEN"] = token
             try:
                 logs.mkdir(parents=True, exist_ok=True)
                 with log.open("a", encoding="utf-8") as output:
@@ -769,10 +823,14 @@ def decide(
     warnings = []
     match action:
         case Action.REQUEST_REVIEW:
-            gh(["pr", "ready", *target], "")
+            gh(["pr", "ready", *target], "", triage.account)
             if triage.reviewers:
                 try:
-                    gh(["pr", "edit", *target, "--add-reviewer", ",".join(triage.reviewers)], "")
+                    gh(
+                        ["pr", "edit", *target, "--add-reviewer", ",".join(triage.reviewers)],
+                        "",
+                        triage.account,
+                    )
                 except GhFailed as error:
                     warnings.append(
                         "Ready にしたが、レビュアーを付けられなかった。"
@@ -784,7 +842,9 @@ def decide(
                 raise InvalidReason(f"差し戻す理由は 1〜{MAX_REASON_LENGTH} 字で書く")
             assert triage.session is not None
             url = pull_request_url(triage.repo, triage.number)
-            resume(triage.session, RETURN_PROMPT.format(url=url, reason=request.reason))
+            resume(
+                triage.session, RETURN_PROMPT.format(url=url, reason=request.reason), triage.account
+            )
             status, note = "returned", request.reason
         case Action.HOLD:
             status, note = "on_hold", None

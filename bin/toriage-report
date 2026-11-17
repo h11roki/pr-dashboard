@@ -28,6 +28,10 @@ jq -e -s 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1 <<<"$judgme
   fail "判断材料が JSON のオブジェクト 1 つとして読めない"
 facts="$(gh pr view "$1" --json number,url,title,headRefName,additions,deletions,changedFiles)" ||
   fail "gh で PR $1 を読めなかった"
+account="$(gh api user --jq .login 2>/dev/null)" || account=""
+if [ -n "$account" ] && ! gh auth token --user "$account" >/dev/null 2>&1; then
+  account=""
+fi
 
 branch="$(git branch --show-current 2>/dev/null)" || branch=""
 workdir="$(git rev-parse --show-toplevel 2>/dev/null)" || workdir=""
@@ -46,8 +50,9 @@ elif [ -n "$claude_session" ]; then
 fi
 
 body="$(jq -c --argjson facts "$facts" --arg session_id "$session_id" --arg agent "$agent" \
-  --arg branch "$branch" --arg workdir "$workdir" '
+  --arg branch "$branch" --arg workdir "$workdir" --arg account "$account" '
   . + {
+    account: (if $account != "" then $account else null end),
     session: (
       if $session_id != "" and $workdir != "" and $branch == $facts.headRefName
       then {id: $session_id, workdir: $workdir, agent: $agent}

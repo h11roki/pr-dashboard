@@ -2,7 +2,7 @@ import json
 import os
 import sqlite3
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -17,6 +17,7 @@ from server import (
     FetchStates,
     GhFailed,
     ResumeSession,
+    RunGh,
     TriageStore,
     parse_report,
     pull_request_states,
@@ -43,7 +44,7 @@ CREATE TABLE prs (
 @pytest.fixture
 def dashboard(
     store: TriageStore,
-    recording_gh: Callable[[list[str], str], None],
+    recording_gh: RunGh,
     recording_resume: ResumeSession,
     recording_states: FetchStates,
 ) -> Iterator[DashboardServer]:
@@ -101,7 +102,7 @@ def test_waits_five_minutes_before_asking_github_again(
     dashboard: DashboardServer,
     store: TriageStore,
     report: dict[str, object],
-    state_requests: list[list[tuple[str, int]]],
+    state_requests: list[list[tuple[str, int, str | None]]],
 ) -> None:
     save(store, report, 128)
 
@@ -119,7 +120,7 @@ def test_asks_github_only_about_prs_that_are_still_open(
     store: TriageStore,
     report: dict[str, object],
     github_states: dict[tuple[str, int], str],
-    state_requests: list[list[tuple[str, int]]],
+    state_requests: list[list[tuple[str, int, str | None]]],
 ) -> None:
     save(store, report, 128)
     save(store, report, 129)
@@ -129,11 +130,28 @@ def test_asks_github_only_about_prs_that_are_still_open(
 
     dashboard.sync_closed_if_due()
 
-    assert state_requests[-1] == [("acme/web", 129)]
+    assert state_requests[-1] == [("acme/web", 129, None)]
+
+
+def test_asks_github_about_each_pr_as_the_account_that_reported_it(
+    dashboard: DashboardServer,
+    store: TriageStore,
+    report: dict[str, object],
+    state_requests: list[list[tuple[str, int, str | None]]],
+) -> None:
+    save(store, report | {"account": "acme-bot"}, 128)
+    save(store, report, 129)
+
+    dashboard.sync_closed_if_due()
+
+    assert sorted(state_requests[-1], key=str) == [
+        ("acme/web", 128, "acme-bot"),
+        ("acme/web", 129, None),
+    ]
 
 
 def test_does_not_ask_github_when_nothing_is_open(
-    dashboard: DashboardServer, state_requests: list[list[tuple[str, int]]]
+    dashboard: DashboardServer, state_requests: list[list[tuple[str, int, str | None]]]
 ) -> None:
     assert dashboard.sync_closed_if_due() == 0
     assert state_requests == []
@@ -198,7 +216,9 @@ def test_reads_the_states_of_many_prs_in_one_query(
         "PATH", f"{write_gh(tmp_path, json.dumps(answer), 1)}{os.pathsep}/usr/bin:/bin"
     )
 
-    states = pull_request_states([("acme/web", 128), ("acme/gone", 1), ("acme/api", 5)])
+    states = pull_request_states(
+        [("acme/web", 128, None), ("acme/gone", 1, None), ("acme/api", 5, None)]
+    )
 
     assert states == {("acme/web", 128): "MERGED", ("acme/api", 5): "OPEN"}
     assert "Could not resolve" in capsys.readouterr().err
@@ -216,7 +236,7 @@ def test_fails_with_what_gh_said_when_the_answer_cannot_be_read(
     monkeypatch.setenv("PATH", f"{write_gh(tmp_path, 'not json', 1)}{os.pathsep}/usr/bin:/bin")
 
     with pytest.raises(GhFailed, match="Could not resolve"):
-        pull_request_states([("acme/web", 128)])
+        pull_request_states([("acme/web", 128, None)])
 
 
 def test_does_not_close_a_pr_reported_again_while_github_was_asked(
@@ -249,7 +269,7 @@ def test_fails_when_github_returns_no_states_at_all(
     monkeypatch.setenv("PATH", f"{write_gh(tmp_path, answer, 1)}{os.pathsep}/usr/bin:/bin")
 
     with pytest.raises(GhFailed, match="Could not resolve"):
-        pull_request_states([("acme/web", 128)])
+        pull_request_states([("acme/web", 128, None)])
 
 
 def test_splits_many_prs_into_several_queries(
@@ -261,7 +281,9 @@ def test_splits_many_prs_into_several_queries(
     )
     monkeypatch.setattr(server, "STATES_PER_QUERY", 2)
 
-    states = pull_request_states([("acme/web", 1), ("acme/web", 2), ("acme/web", 3)])
+    states = pull_request_states(
+        [("acme/web", 1, None), ("acme/web", 2, None), ("acme/web", 3, None)]
+    )
 
     assert states == {("acme/web", 1): "MERGED", ("acme/web", 3): "MERGED"}
     calls = (tmp_path / "arguments").read_text(encoding="utf-8").count("graphql")
@@ -284,7 +306,75 @@ def test_keeps_the_states_read_when_one_of_several_queries_fails(
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}/usr/bin:/bin")
     monkeypatch.setattr(server, "STATES_PER_QUERY", 1)
 
-    states = pull_request_states([("acme/web", 1), ("acme/broken", 2)])
+    states = pull_request_states([("acme/web", 1, None), ("acme/broken", 2, None)])
 
     assert states == {("acme/web", 1): "MERGED"}
     assert "rate limited" in capsys.readouterr().err
+
+
+def write_gh_logged_in_as(tmp_path: Path, account: str) -> Path:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [ "$1 $2" = "auth token" ]; then\n'
+        f'  echo "$4" >> "{tmp_path / "lookups"}"\n'
+        f'  [ "$4" = {account} ] || {{ echo "no oauth token found for $4" >&2; exit 1; }}\n'
+        f"  echo token-of-{account}; exit 0\n"
+        "fi\n"
+        f'printf "%s %s\\n" "${{GH_TOKEN:-active}}" "$*" >> "{tmp_path / "queries"}"\n'
+        """echo '{"data": {"p0": {"pullRequest": {"state": "MERGED"}},"""
+        """ "p1": {"pullRequest": {"state": "OPEN"}}}}'\n""",
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+    return bin_dir
+
+
+def test_asks_github_once_per_account_with_its_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PATH", f"{write_gh_logged_in_as(tmp_path, 'acme-bot')}:/usr/bin:/bin")
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+
+    states = pull_request_states(
+        [("acme/web", 1, "acme-bot"), ("acme/api", 2, None), ("acme/web", 3, "acme-bot")]
+    )
+
+    assert states == {
+        ("acme/web", 1): "MERGED",
+        ("acme/web", 3): "OPEN",
+        ("acme/api", 2): "MERGED",
+    }
+    queries = (tmp_path / "queries").read_text(encoding="utf-8").splitlines()
+    assert len(queries) == 2
+    [as_bot] = [query for query in queries if query.startswith("token-of-acme-bot ")]
+    assert "number: 1" in as_bot and "number: 3" in as_bot and '"api"' not in as_bot
+    [as_active] = [query for query in queries if query.startswith("active ")]
+    assert 'name: "api"' in as_active
+
+
+def test_still_checks_the_other_accounts_when_gh_is_not_logged_in_as_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("PATH", f"{write_gh_logged_in_as(tmp_path, 'acme-bot')}:/usr/bin:/bin")
+
+    states = pull_request_states([("acme/web", 1, "acme-dev"), ("acme/api", 2, "acme-bot")])
+
+    assert states == {("acme/api", 2): "MERGED"}
+    assert "acme-dev のトークンを取れなかった(no oauth token found for acme-dev)" in (
+        capsys.readouterr().err
+    )
+
+
+def test_looks_up_the_token_of_an_account_once_for_all_its_queries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PATH", f"{write_gh_logged_in_as(tmp_path, 'acme-bot')}:/usr/bin:/bin")
+    monkeypatch.setattr(server, "STATES_PER_QUERY", 1)
+
+    pull_request_states([("acme/web", 1, "acme-bot"), ("acme/web", 2, "acme-bot")])
+
+    assert (tmp_path / "lookups").read_text(encoding="utf-8").splitlines() == ["acme-bot"]
+    assert len((tmp_path / "queries").read_text(encoding="utf-8").splitlines()) == 2

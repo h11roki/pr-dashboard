@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 import server
-from server import Agent, ResumeFailed, Session, SessionBusy, resume_in_background
+from server import Agent, GhFailed, ResumeFailed, Session, SessionBusy, resume_in_background
 
 SESSION_ID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 FAKE_AGENT = """#!/usr/bin/env python3
@@ -23,6 +23,7 @@ with open({calls!r}, "w") as calls:
             "session_variable": os.environ.get("CLAUDE_CODE_SESSION_ID"),
             "codex_thread_variable": os.environ.get("CODEX_THREAD_ID"),
             "path": os.environ.get("PATH"),
+            "gh_token": os.environ.get("GH_TOKEN"),
         }},
         calls,
     )
@@ -106,7 +107,7 @@ def test_resumes_the_session_in_its_workdir_with_auto_mode(
     monkeypatch.setenv("CODEX_THREAD_ID", "the-thread-that-started-the-server")
     logs = tmp_path / "returns"
 
-    resume_in_background(logs)(Session(id=SESSION_ID, workdir=str(workdir)), "直してください")
+    resume_in_background(logs)(Session(id=SESSION_ID, workdir=str(workdir)), "直してください", None)
 
     call = fake_agent.call()
     assert call["args"] == [
@@ -136,7 +137,7 @@ def test_resumes_a_codex_session_with_automatic_review(
     logs = tmp_path / "returns"
 
     resume_in_background(logs)(
-        Session(id=SESSION_ID, workdir=str(workdir), agent=Agent.CODEX), "直してください"
+        Session(id=SESSION_ID, workdir=str(workdir), agent=Agent.CODEX), "直してください", None
     )
 
     call = fake_agent.call()
@@ -157,7 +158,7 @@ def test_uses_the_codex_named_in_toriage_codex(
     monkeypatch.setenv("TORIAGE_CODEX", str(configured))
 
     resume_in_background(tmp_path / "returns")(
-        Session(id=SESSION_ID, workdir=str(workdir), agent=Agent.CODEX), "直してください"
+        Session(id=SESSION_ID, workdir=str(workdir), agent=Agent.CODEX), "直してください", None
     )
 
     assert fake_agent.call()["args"] == [*CODEX_RESUME_ARGS, SESSION_ID, "直してください"]
@@ -171,7 +172,7 @@ def test_rejects_a_relative_toriage_codex(
 
     with pytest.raises(ResumeFailed, match="絶対パス"):
         resume_in_background(logs)(
-            Session(id=SESSION_ID, workdir=str(workdir), agent=Agent.CODEX), "直してください"
+            Session(id=SESSION_ID, workdir=str(workdir), agent=Agent.CODEX), "直してください", None
         )
 
     assert not fake_agent.calls.exists()
@@ -186,7 +187,7 @@ def test_names_toriage_codex_when_the_codex_it_names_cannot_run(
 
     with pytest.raises(ResumeFailed, match="TORIAGE_CODEX"):
         resume_in_background(logs)(
-            Session(id=SESSION_ID, workdir=str(workdir), agent=Agent.CODEX), "直してください"
+            Session(id=SESSION_ID, workdir=str(workdir), agent=Agent.CODEX), "直してください", None
         )
 
     assert not fake_agent.calls.exists()
@@ -208,7 +209,7 @@ def test_does_not_run_an_agent_found_through_a_relative_path_entry(
 
     with pytest.raises(ResumeFailed, match=f"{agent.value} が見つからない"):
         resume_in_background(tmp_path / "returns")(
-            Session(id=SESSION_ID, workdir=str(workdir), agent=agent), "直してください"
+            Session(id=SESSION_ID, workdir=str(workdir), agent=agent), "直してください", None
         )
 
     assert not fake_agent.calls.exists()
@@ -223,7 +224,7 @@ def test_finds_codex_inside_an_app_when_it_is_not_on_the_path(
     monkeypatch.setattr(server, "CODEX_LOCATIONS", (tmp_path / "Codex.app" / "codex", app_codex))
 
     resume_in_background(tmp_path / "returns")(
-        Session(id=SESSION_ID, workdir=str(workdir), agent=Agent.CODEX), "直してください"
+        Session(id=SESSION_ID, workdir=str(workdir), agent=Agent.CODEX), "直してください", None
     )
 
     assert fake_agent.call()["args"] == [*CODEX_RESUME_ARGS, SESSION_ID, "直してください"]
@@ -237,7 +238,7 @@ def test_fails_when_codex_cannot_be_found(
 
     with pytest.raises(ResumeFailed, match="TORIAGE_CODEX"):
         resume_in_background(logs)(
-            Session(id=SESSION_ID, workdir=str(workdir), agent=Agent.CODEX), "直してください"
+            Session(id=SESSION_ID, workdir=str(workdir), agent=Agent.CODEX), "直してください", None
         )
 
     assert not fake_agent.calls.exists()
@@ -266,7 +267,7 @@ def test_leaves_out_the_plugin_bin_the_server_was_started_with(
     monkeypatch.setenv("PATH", f"{older_plugin_bin}{os.pathsep}{path_without_plugin}")
 
     resume_in_background(tmp_path / "returns")(
-        Session(id=SESSION_ID, workdir=str(workdir)), "直してください"
+        Session(id=SESSION_ID, workdir=str(workdir)), "直してください", None
     )
 
     assert fake_agent.call()["path"] == path_without_plugin
@@ -281,7 +282,7 @@ def test_leaves_out_a_plugin_bin_reached_through_a_symlink(
     monkeypatch.setenv("PATH", f"{linked_bin}{os.pathsep}{path_without_plugin}")
 
     resume_in_background(tmp_path / "returns")(
-        Session(id=SESSION_ID, workdir=str(workdir)), "直してください"
+        Session(id=SESSION_ID, workdir=str(workdir)), "直してください", None
     )
 
     assert fake_agent.call()["path"] == path_without_plugin
@@ -298,7 +299,7 @@ def test_checks_a_relative_path_entry_from_the_workdir(
     monkeypatch.setenv("PATH", f"bin{os.pathsep}{path_without_plugin}")
 
     resume_in_background(tmp_path / "returns")(
-        Session(id=SESSION_ID, workdir=str(workdir)), "直してください"
+        Session(id=SESSION_ID, workdir=str(workdir)), "直してください", None
     )
 
     assert fake_agent.call()["path"] == path_without_plugin
@@ -310,7 +311,7 @@ def test_keeps_a_directory_that_holds_the_report_command_outside_a_plugin(
     install_report_command(fake_agent.bin_dir)
 
     resume_in_background(tmp_path / "returns")(
-        Session(id=SESSION_ID, workdir=str(workdir)), "直してください"
+        Session(id=SESSION_ID, workdir=str(workdir)), "直してください", None
     )
 
     assert fake_agent.call()["path"] == os.environ["PATH"]
@@ -323,15 +324,15 @@ def test_does_not_resume_a_session_that_is_still_running(
     logs = tmp_path / "returns"
     resume = resume_in_background(logs)
     session = Session(id=SESSION_ID, workdir=str(workdir), agent=agent)
-    resume(session, "直してください")
+    resume(session, "直してください", None)
     fake_agent.call()
 
     with pytest.raises(SessionBusy, match="まだ直している"):
-        resume(session, "もう一度")
+        resume(session, "もう一度", None)
 
     fake_agent.finish()
     wait_until(lambda: "終了コード" in log_of(logs))
-    resume(session, "直ったか確かめて")
+    resume(session, "直ったか確かめて", None)
     wait_until(lambda: log_of(logs).count("終了コード") == 2)
 
 
@@ -346,11 +347,11 @@ def test_sees_a_running_resume_even_when_columns_is_narrow(
     monkeypatch.setenv("COLUMNS", "40")
     resume = resume_in_background(tmp_path / "returns")
     session = Session(id=SESSION_ID, workdir=str(workdir), agent=agent)
-    resume(session, "直してください")
+    resume(session, "直してください", None)
     fake_agent.call()
 
     with pytest.raises(SessionBusy, match="まだ直している"):
-        resume(session, "もう一度")
+        resume(session, "もう一度", None)
 
 
 SLEEPER = [sys.executable, "-c", "import time; time.sleep(30)"]
@@ -374,7 +375,7 @@ def test_a_pid_left_behind_by_another_process_does_not_block(
         (logs / f"{SESSION_ID}.pid").write_text(f"{reused.pid}\n", encoding="utf-8")
         try:
             resume_in_background(logs)(
-                Session(id=SESSION_ID, workdir=str(workdir), agent=agent), "直して"
+                Session(id=SESSION_ID, workdir=str(workdir), agent=agent), "直して", None
             )
 
             assert fake_agent.call()["args"]
@@ -409,7 +410,7 @@ def test_stops_the_agent_and_what_it_started_when_it_cannot_record_the_resume(
     (logs / f"{SESSION_ID}.pid").mkdir(parents=True)
 
     with pytest.raises(ResumeFailed, match="書き残せなかった"):
-        resume_in_background(logs)(Session(id=SESSION_ID, workdir=str(workdir)), "直して")
+        resume_in_background(logs)(Session(id=SESSION_ID, workdir=str(workdir)), "直して", None)
 
     wait_until(lambda: not is_running(int(child_pid.read_text(encoding="utf-8"))))
 
@@ -429,14 +430,14 @@ def test_reports_that_it_could_not_record_even_when_the_agent_has_already_exited
     (logs / f"{SESSION_ID}.pid").mkdir(parents=True)
 
     with pytest.raises(ResumeFailed, match="書き残せなかった"):
-        resume_in_background(logs)(Session(id=SESSION_ID, workdir=str(workdir)), "直して")
+        resume_in_background(logs)(Session(id=SESSION_ID, workdir=str(workdir)), "直して", None)
 
 
 def test_fails_when_the_workdir_is_gone(tmp_path: Path, fake_agent: FakeAgent) -> None:
     session = Session(id=SESSION_ID, workdir=str(tmp_path / "removed-worktree"))
 
     with pytest.raises(ResumeFailed, match="removed-worktree"):
-        resume_in_background(tmp_path / "returns")(session, "直してください")
+        resume_in_background(tmp_path / "returns")(session, "直してください", None)
 
     assert not fake_agent.calls.exists()
 
@@ -448,7 +449,7 @@ def test_fails_when_the_log_cannot_be_written(
     logs.write_text("ディレクトリではない", encoding="utf-8")
 
     with pytest.raises(ResumeFailed, match="起動できなかった"):
-        resume_in_background(logs)(Session(id=SESSION_ID, workdir=str(workdir)), "直して")
+        resume_in_background(logs)(Session(id=SESSION_ID, workdir=str(workdir)), "直して", None)
 
     assert not fake_agent.calls.exists()
 
@@ -460,6 +461,70 @@ def test_fails_when_claude_code_is_not_installed(
     logs = tmp_path / "returns"
 
     with pytest.raises(ResumeFailed, match="Claude Code"):
-        resume_in_background(logs)(Session(id=SESSION_ID, workdir=str(workdir)), "直してください")
+        resume_in_background(logs)(
+            Session(id=SESSION_ID, workdir=str(workdir)), "直してください", None
+        )
 
+    assert not logs.exists()
+
+
+def install_gh_logged_in_as(bin_dir: Path, account: str) -> None:
+    gh = bin_dir / "gh"
+    gh.write_text(
+        f'#!/bin/sh\n[ "$*" = "auth token --user {account}" ] || exit 1\necho token-of-{account}\n',
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+
+
+def test_lets_the_resumed_agent_use_github_as_the_account_that_made_the_pr(
+    tmp_path: Path, fake_agent: FakeAgent, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install_gh_logged_in_as(fake_agent.bin_dir, "acme-bot")
+    monkeypatch.setenv("GH_TOKEN", "token-the-server-was-started-with")
+
+    resume_in_background(tmp_path / "returns")(
+        Session(id=SESSION_ID, workdir=str(workdir)), "直してください", "acme-bot"
+    )
+
+    assert fake_agent.call()["gh_token"] == "token-of-acme-bot"
+
+
+def test_leaves_github_to_the_active_account_when_the_report_has_no_account(
+    tmp_path: Path, fake_agent: FakeAgent, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+
+    resume_in_background(tmp_path / "returns")(
+        Session(id=SESSION_ID, workdir=str(workdir)), "直してください", None
+    )
+
+    assert fake_agent.call()["gh_token"] is None
+
+
+def test_says_the_session_is_still_busy_before_asking_gh_for_the_token(
+    tmp_path: Path, fake_agent: FakeAgent, workdir: Path
+) -> None:
+    install_gh_logged_in_as(fake_agent.bin_dir, "acme-bot")
+    resume = resume_in_background(tmp_path / "returns")
+    session = Session(id=SESSION_ID, workdir=str(workdir))
+    resume(session, "直してください", "acme-bot")
+    fake_agent.call()
+
+    with pytest.raises(SessionBusy, match="まだ直している"):
+        resume(session, "もう一度", "acme-dev")
+
+
+def test_does_not_resume_when_gh_is_not_logged_in_as_the_account(
+    tmp_path: Path, fake_agent: FakeAgent, workdir: Path
+) -> None:
+    install_gh_logged_in_as(fake_agent.bin_dir, "acme-bot")
+    logs = tmp_path / "returns"
+
+    with pytest.raises(GhFailed, match="acme-dev のトークンを取れなかった.終了コード 1"):
+        resume_in_background(logs)(
+            Session(id=SESSION_ID, workdir=str(workdir)), "直してください", "acme-dev"
+        )
+
+    assert not fake_agent.calls.exists()
     assert not logs.exists()
