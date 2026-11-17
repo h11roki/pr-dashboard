@@ -46,8 +46,8 @@ toriage では、PR を作ったエージェント自身が「何を変えたか
 
 - Claude Code か Codex(Codex は CLI 0.167 で確かめました)
 - [GitHub CLI](https://cli.github.com/)(`gh auth login` 済み)
-- `jq` と `curl`
-- Python 3.13 以上。なければ [uv](https://docs.astral.sh/uv/) が Python 3.13 を用意して動かします
+- `jq` と `curl`(macOS には最初から入っています)
+- Python 3.9 以上。macOS に最初から入っている `python3`(Command Line Tools の 3.9)で動きます。なければ [uv](https://docs.astral.sh/uv/) が用意して動かします
 - macOS か Linux
 
 ## 入れ方

@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 import json
 import os
 import re
 import shutil
 import signal
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -11,12 +14,12 @@ import time
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
-from enum import StrEnum
+from datetime import datetime, timezone
+from enum import Enum
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import assert_never
+from typing import Optional, TypeVar
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent
@@ -154,17 +157,18 @@ UPDATE_DECISION = """
 UPDATE prs SET status = ?, note = ?, decided_at = ? WHERE id = ?
 """
 
-RunGh = Callable[[list[str], str, str | None], None]
-FetchStates = Callable[[list[tuple[str, int, str | None]]], dict[tuple[str, int], str]]
+T = TypeVar("T")
+RunGh = Callable[[list[str], str, Optional[str]], None]
+FetchStates = Callable[[list[tuple[str, int, Optional[str]]]], dict[tuple[str, int], str]]
 
 
-class Action(StrEnum):
+class Action(str, Enum):
     REQUEST_REVIEW = "request-review"
     RETURN = "return"
     HOLD = "hold"
 
 
-class Agent(StrEnum):
+class Agent(str, Enum):
     CLAUDE = "claude"
     CODEX = "codex"
 
@@ -251,7 +255,7 @@ class Session:
     agent: Agent = Agent.CLAUDE
 
 
-ResumeSession = Callable[[Session, str, str | None], None]
+ResumeSession = Callable[[Session, str, Optional[str]], None]
 
 
 @dataclass(frozen=True)
@@ -300,7 +304,7 @@ class Triage:
     actions: tuple[Action, ...]
 
 
-def _field[T](data: dict[str, object], key: str, kind: type[T]) -> T:
+def _field(data: dict[str, object], key: str, kind: type[T]) -> T:
     value = data.get(key)
     if isinstance(value, bool) or not isinstance(value, kind):
         raise InvalidReport(f"{key} は {kind.__name__} で指定する")
@@ -353,7 +357,7 @@ def _session_or_none(value: object) -> Session | None:
         return None
     if not isinstance(workdir, str) or not Path(workdir).is_absolute() or "\0" in workdir:
         return None
-    if not isinstance(agent, str) or agent not in Agent:
+    if not isinstance(agent, str) or agent not in {member.value for member in Agent}:
         return None
     return Session(id=session_id, workdir=workdir, agent=Agent(agent))
 
@@ -437,7 +441,7 @@ class TriageStore:
 
     def save(self, report: Report, received_at: datetime) -> bool:
         payload = json.dumps(asdict(report), ensure_ascii=False)
-        received = received_at.astimezone(UTC).isoformat(timespec="milliseconds")
+        received = received_at.astimezone(timezone.utc).isoformat(timespec="milliseconds")
         with self._lock, self._connection:
             cursor = self._connection.execute(
                 UPSERT_REPORT, (report.repo, report.number, payload, received)
@@ -480,7 +484,7 @@ class TriageStore:
     def decide(
         self, triage: Triage, status: str, note: str | None, decided_at: datetime
     ) -> tuple[bool, bool]:
-        decided = decided_at.astimezone(UTC).isoformat(timespec="milliseconds")
+        decided = decided_at.astimezone(timezone.utc).isoformat(timespec="milliseconds")
         with self._lock, self._connection:
             row = self._connection.execute(SELECT_DECISION_STATE, (triage.id,)).fetchone()
             if row is None or row["status"] != triage.status:
@@ -521,7 +525,7 @@ class TriageStore:
         self._connection.close()
 
 
-def load_json[E: Exception](body: bytes, error: type[E]) -> object:
+def load_json(body: bytes, error: type[Exception]) -> object:
     try:
         return json.loads(body)
     except (ValueError, RecursionError) as problem:
@@ -716,29 +720,25 @@ def _resume_environment(workdir: str) -> dict[str, str]:
 
 
 def _resume_command(session: Session, environment: dict[str, str]) -> list[str]:
-    match session.agent:
-        case Agent.CLAUDE:
-            claude = _find_on_path("claude", environment)
-            if claude is None:
-                raise ResumeFailed(
-                    "claude が見つからない。Claude Code の claude がある場所を PATH に入れて、"
-                    "ダッシュボードを起動し直す"
-                )
-            return [
-                claude,
-                "-p",
-                "--resume",
-                session.id,
-                "--permission-mode",
-                "auto",
-                "--permission-prompts",
-                "none",
-            ]
-        case Agent.CODEX:
-            codex = _find_codex(environment)
-            return [codex, "exec", "resume", *CODEX_RESUME_SETTINGS, session.id]
-        case _:
-            assert_never(session.agent)
+    if session.agent is Agent.CODEX:
+        codex = _find_codex(environment)
+        return [codex, "exec", "resume", *CODEX_RESUME_SETTINGS, session.id]
+    claude = _find_on_path("claude", environment)
+    if claude is None:
+        raise ResumeFailed(
+            "claude が見つからない。Claude Code の claude がある場所を PATH に入れて、"
+            "ダッシュボードを起動し直す"
+        )
+    return [
+        claude,
+        "-p",
+        "--resume",
+        session.id,
+        "--permission-mode",
+        "auto",
+        "--permission-prompts",
+        "none",
+    ]
 
 
 def _find_codex(environment: dict[str, str]) -> str:
@@ -788,7 +788,7 @@ def _still_resuming(marker: Path, command: list[str]) -> bool:
 
 
 def _now() -> str:
-    return datetime.now(UTC).isoformat(timespec="milliseconds")
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
 def parse_decision_request(body: bytes) -> DecisionRequest:
@@ -821,36 +821,30 @@ def decide(
         raise ReportChanged("新しい報告が届いている。読み直してから判断する")
     target = [str(triage.number), "-R", triage.repo]
     warnings = []
-    match action:
-        case Action.REQUEST_REVIEW:
-            gh(["pr", "ready", *target], "", triage.account)
-            if triage.reviewers:
-                try:
-                    gh(
-                        ["pr", "edit", *target, "--add-reviewer", ",".join(triage.reviewers)],
-                        "",
-                        triage.account,
-                    )
-                except GhFailed as error:
-                    warnings.append(
-                        "Ready にしたが、レビュアーを付けられなかった。"
-                        f"GitHub の PR で付ける({error})"
-                    )
-            status, note = "requested", None
-        case Action.RETURN:
-            if not request.reason.strip() or len(request.reason) > MAX_REASON_LENGTH:
-                raise InvalidReason(f"差し戻す理由は 1〜{MAX_REASON_LENGTH} 字で書く")
-            assert triage.session is not None
-            url = pull_request_url(triage.repo, triage.number)
-            resume(
-                triage.session, RETURN_PROMPT.format(url=url, reason=request.reason), triage.account
-            )
-            status, note = "returned", request.reason
-        case Action.HOLD:
-            status, note = "on_hold", None
-        case _:
-            assert_never(action)
-    recorded, report_changed = store.decide(triage, status, note, datetime.now(UTC))
+    if action is Action.REQUEST_REVIEW:
+        gh(["pr", "ready", *target], "", triage.account)
+        if triage.reviewers:
+            try:
+                gh(
+                    ["pr", "edit", *target, "--add-reviewer", ",".join(triage.reviewers)],
+                    "",
+                    triage.account,
+                )
+            except GhFailed as error:
+                warnings.append(
+                    f"Ready にしたが、レビュアーを付けられなかった。GitHub の PR で付ける({error})"
+                )
+        status, note = "requested", None
+    elif action is Action.RETURN:
+        if not request.reason.strip() or len(request.reason) > MAX_REASON_LENGTH:
+            raise InvalidReason(f"差し戻す理由は 1〜{MAX_REASON_LENGTH} 字で書く")
+        assert triage.session is not None
+        url = pull_request_url(triage.repo, triage.number)
+        resume(triage.session, RETURN_PROMPT.format(url=url, reason=request.reason), triage.account)
+        status, note = "returned", request.reason
+    else:
+        status, note = "on_hold", None
+    recorded, report_changed = store.decide(triage, status, note, datetime.now(timezone.utc))
     if not recorded:
         raise AlreadyDecided("反映はしたが、そのあいだに状態が変わったので記録していない")
     if report_changed:
@@ -867,7 +861,7 @@ def import_inbox(inbox: Path, store: TriageStore) -> int:
             written = path.stat()
             if written.st_size > MAX_BODY_BYTES:
                 raise InvalidReport(f"本文は {MAX_BODY_BYTES} バイトまで")
-            written_at = datetime.fromtimestamp(written.st_mtime, UTC)
+            written_at = datetime.fromtimestamp(written.st_mtime, timezone.utc)
             report = parse_body(path.read_bytes())
         except (OSError, ValueError, OverflowError) as error:
             print(f"{path} を取り込めませんでした: {error}", file=sys.stderr)
@@ -965,7 +959,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return None
         try:
             body = self.rfile.read(int(digits))
-        except TimeoutError:
+        except (TimeoutError, socket.timeout):
             self._reject(HTTPStatus.REQUEST_TIMEOUT, "本文が届かない")
             return None
         if self.headers.get_content_type() != "application/json":
@@ -982,7 +976,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except InvalidReport as error:
             self._reject(HTTPStatus.BAD_REQUEST, str(error))
             return
-        saved = self.server.store.save(report, datetime.now(UTC))
+        saved = self.server.store.save(report, datetime.now(timezone.utc))
         if saved:
             self.server.synced_at = None
         self._send_json(HTTPStatus.OK, {"saved": saved})
@@ -1086,10 +1080,9 @@ def check_stdin() -> None:
 
 
 if __name__ == "__main__":
-    match sys.argv[1:]:
-        case []:
-            main()
-        case ["--check"]:
-            check_stdin()
-        case _:
-            sys.exit("使い方: python3 server.py [--check]")
+    if sys.argv[1:] == []:
+        main()
+    elif sys.argv[1:] == ["--check"]:
+        check_stdin()
+    else:
+        sys.exit("使い方: python3 server.py [--check]")

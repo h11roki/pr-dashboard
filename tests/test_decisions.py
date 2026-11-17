@@ -1,10 +1,13 @@
+from __future__ import annotations
+
 import json
 import sqlite3
 from contextlib import closing
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from http.client import HTTPConnection
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -25,8 +28,8 @@ from server import (
     parse_report,
 )
 
-GhCalls = list[tuple[list[str], str, str | None]]
-Resumed = list[tuple[Session, str, str | None]]
+GhCalls = list[tuple[list[str], str, Optional[str]]]
+Resumed = list[tuple[Session, str, Optional[str]]]
 SESSION = Session(id="0f8fad5b-d9cb-469f-a165-70867728950e", workdir="/work/web")
 
 
@@ -35,7 +38,7 @@ def from_a_session(report: dict[str, object]) -> dict[str, object]:
 
 
 def save_pending(store: TriageStore, report: dict[str, object]) -> Triage:
-    store.save(parse_report(report), datetime.now(UTC))
+    store.save(parse_report(report), datetime.now(timezone.utc))
     [triage] = store.list_triages()
     return triage
 
@@ -379,7 +382,7 @@ def test_a_report_that_arrives_while_returning_is_recorded_with_a_warning(
     ) -> None:
         store.save(
             parse_report(from_a_session(report) | {"title": "直した題"}),
-            datetime.now(UTC) + timedelta(seconds=1),
+            datetime.now(timezone.utc) + timedelta(seconds=1),
         )
 
     resume: ResumeSession = resume_while_a_new_report_arrives

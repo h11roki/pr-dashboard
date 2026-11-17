@@ -1,10 +1,12 @@
+from __future__ import annotations
+
 import json
 import os
 import sqlite3
 import time
 from collections.abc import Iterator
 from contextlib import closing
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -24,7 +26,7 @@ from server import (
     pull_request_url,
 )
 
-MORNING = datetime(2026, 11, 16, 9, 0, tzinfo=UTC)
+MORNING = datetime(2026, 11, 16, 9, 0, tzinfo=timezone.utc)
 OLD_SCHEMA = """
 CREATE TABLE prs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

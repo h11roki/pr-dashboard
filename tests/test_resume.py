@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import os
 import subprocess
@@ -13,6 +15,7 @@ import server
 from server import Agent, GhFailed, ResumeFailed, Session, SessionBusy, resume_in_background
 
 SESSION_ID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+UNPATCHED_POPEN = subprocess.Popen
 FAKE_AGENT = """#!/usr/bin/env python3
 import json, os, sys, time
 with open({calls!r}, "w") as calls:
@@ -384,9 +387,10 @@ def test_a_pid_left_behind_by_another_process_does_not_block(
 
 
 def is_running(pid: int) -> bool:
-    state = subprocess.run(
-        ["ps", "-p", str(pid), "-o", "stat="], capture_output=True, text=True, check=False
-    ).stdout.strip()
+    with UNPATCHED_POPEN(
+        ["ps", "-p", str(pid), "-o", "stat="], stdout=subprocess.PIPE, text=True
+    ) as ps:
+        state = ps.communicate()[0].strip()
     return state != "" and not state.startswith("Z")
 
 
@@ -423,7 +427,7 @@ def test_reports_that_it_could_not_record_even_when_the_agent_has_already_exited
     class PopenAfterTheAgentExits(subprocess.Popen[bytes]):
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, **kwargs)
-            os.waitid(os.P_PID, self.pid, os.WEXITED | os.WNOWAIT)
+            wait_until(lambda: not is_running(self.pid))
 
     monkeypatch.setattr(subprocess, "Popen", PopenAfterTheAgentExits)
     logs = tmp_path / "returns"

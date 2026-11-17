@@ -21,3 +21,14 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy
       - run: uv run pytest
+
+  test-python-39:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --python 3.9
+      - run: uv run --python 3.9 python --version
+      - run: uv run --python 3.9 pytest

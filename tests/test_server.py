@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import json
 import socket
 import threading
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from http.client import HTTPConnection
 
 import pytest
@@ -209,7 +211,7 @@ def test_the_page_can_ask_for_a_check(
     report: dict[str, object],
     github_states: dict[tuple[str, int], str],
 ) -> None:
-    store.save(parse_report(report), datetime.now(UTC))
+    store.save(parse_report(report), datetime.now(timezone.utc))
     github_states[("acme/web", 128)] = "MERGED"
 
     status, body = send(port, "POST", "/api/prs/sync", *SYNC_REQUEST)
@@ -225,7 +227,7 @@ def test_reports_a_failed_check_and_changes_nothing(
     report: dict[str, object],
     state_failures: list[GhFailed],
 ) -> None:
-    store.save(parse_report(report), datetime.now(UTC))
+    store.save(parse_report(report), datetime.now(timezone.utc))
     state_failures.append(GhFailed("gh auth login が要る"))
 
     status, body = send(port, "POST", "/api/prs/sync", *SYNC_REQUEST)
