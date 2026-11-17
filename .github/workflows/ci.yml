@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  UV_FROZEN: "1"
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -16,8 +19,19 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.0
         with:
           enable-cache: true
-      - run: uv sync --frozen
+      - run: uv sync
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy
       - run: uv run pytest
+
+  test-macos-python:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: true
+      - run: uv sync --python /usr/bin/python3
+      - run: uv run --python /usr/bin/python3 python -c "import sys; assert sys.version_info[:2] == (3, 9), sys.version"
+      - run: uv run --python /usr/bin/python3 pytest

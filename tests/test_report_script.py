@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import os
 import shutil
@@ -5,7 +7,7 @@ import subprocess
 import sys
 import time
 from contextlib import closing
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -404,7 +406,7 @@ def test_does_not_notify_when_the_report_waits_in_the_inbox(
 def test_does_not_notify_when_a_newer_report_is_kept(
     tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
 ) -> None:
-    store.save(parse_report(report), datetime.now(UTC) + timedelta(days=1))
+    store.save(parse_report(report), datetime.now(timezone.utc) + timedelta(days=1))
     judgment = json.dumps(judgment_of(report))
 
     result = run_script(

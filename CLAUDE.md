@@ -7,7 +7,7 @@ Claude Code や Codex が作った PR の判断材料を受け取り、手元の
 - 起動: `bin/toriage-start`(裏で起動してつながるまで待つ。何度呼んでも 1 つ。`--restart` で起動し直す)。前で動かすなら `python3 server.py`。どちらも `http://127.0.0.1:8787`
 - プラグインとして試す: `claude --plugin-dir .`、検証は `claude plugin validate .`
 - `uv sync`
-- `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest`(CI と同じ)
+- `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest` と、macOS の `python3` でのテスト `UV_PROJECT_ENVIRONMENT=.venv-3.9 uv run --frozen --python /usr/bin/python3 pytest`。CI は lock を固定し(`UV_FROZEN`)、Linux の 3.13 で前者を、macOS の `/usr/bin/python3`(3.9)で後者を回す。3.9 の環境は `.venv` と分けないと、mypy の無い環境に作り直される
 
 ## 構成
 
@@ -15,7 +15,7 @@ Claude Code や Codex が作った PR の判断材料を受け取り、手元の
 - `static/index.html`: 画面。HTML と素の JavaScript の 1 ファイル。左に PR の一覧、右に選んだ PR の中身を出す 2 ペインで、幅が 768px より狭いと一覧と中身を切り替える。選んだ PR は URL の `#pr-<id>` に持つ(0015)。サーバーは起動時に 1 回だけ読むので、書き換えたら起動し直す
 - `bin/toriage-report`: スキル `report` で Claude Code か Codex が呼ぶ送信スクリプト(Claude Code ではプラグインが有効なあいだ Bash の PATH に入る。Codex は入れないので、スキルが `SKILL.md` から見た場所で呼ぶ)。判断材料(標準入力の JSON)に `gh pr view` の数字と、`gh api user` のアカウント名(`account`、読めないときと `gh auth login` していないときは `null`)と、会話の ID と実行した場所から作る `session` を足し、`server.py --check`(サーバーと同じ `parse_body` の検証)を通してから送る。つながらなければ `toriage-start` で起動して送り直し、届かなかったと分かるとき(curl の 6、7)だけ inbox に保存する(0006、0008)。保存したと答えたら、ページは開かずに通知を出す。macOS は `terminal-notifier`(押すとダッシュボードを開き、`-group` で同じ PR の前の通知を置き換える)、無ければ `osascript`、Linux は `DISPLAY` か `WAYLAND_DISPLAY` があるときだけ `notify-send`。`nohup` を付けて裏で動かし、待たない。PR の題は、`osascript` には引数、`terminal-notifier` には標準入力で渡し、`notify-send` には `--` のあとに逃がして渡す。`TORIAGE_NOTIFY=0` なら出さない(0017)。終わり方は 0 が送ったか inbox に保存した、1 が理由を出して失敗、2 が使い方の誤り。`gh`、`jq`、`curl` が要る。送り先は `TORIAGE_URL` で変えられ、そのときは起動しない。会話の ID は、`CLAUDE_CODE_SESSION_ID` だけなら `agent: claude`、`CODEX_THREAD_ID` だけなら `agent: codex` で付け、両方あれば付けずに、差し戻しはできないと標準エラーに出す(0014)
 - `bin/toriage-start`: サーバーを `nohup` で裏に起動し、最大 10 秒つながるまで待つ。作業ディレクトリはデータの置き場所にし、`GH_TOKEN` と `GITHUB_TOKEN` は渡さない(0008)。起動できなければ `server.log` の場所を出して 1 で終わる。`--restart` は 8787 番で答えているサーバーに `POST /api/shutdown` で止まってもらい(置き場所や版によらない)、止まらなければ 1 で終わる(0010)。`server.pid` は番号を知るためだけに残す。SessionStart のフック(`hooks/hooks.json`、待ち時間はフックの 15 秒より短くする)、スキル `open`、送信スクリプトが呼ぶ
-- `libexec/toriage-python`: 3.13 以上の `python3`、なければ uv の Python 3.13 で実行する
+- `libexec/toriage-python`: 3.9 以上の `python3`(macOS に最初からあるもので動く)、なければ uv の Python で実行する(0019)
 - `libexec/toriage-home`: データの置き場所を出す。`server.py` の `data_home()` と同じ決まりで、テストで一致を確かめている
 - `skills/report`、`skills/open`: `/toriage:report`(判断材料の書き方と送り方)、`/toriage:open`(起動して開く。人が呼ぶときだけ)
 - `.claude-plugin/`: `plugin.json` と `marketplace.json`(同じリポジトリを marketplace `h11roki` にする)
@@ -46,5 +46,6 @@ Claude Code や Codex が作った PR の判断材料を受け取り、手元の
 
 - フェーズ: 1 受け取って表示する、2 Claude Code とつなぐ、3 判断をその場で実行する、4 使いながら足す
 - 新しい設計判断は先に ADR を書き、`docs/adr/README.md` の一覧を更新する
-- Python 3.13、mypy strict。コメントは書かず、経緯はコミットメッセージに書く
+- 動かすのは Python 3.9 以上、開発は 3.13。`match` 文、`StrEnum`、`assert_never`、`datetime.UTC`、型引数の構文、実行時に評価される `X | None` は使わず、どのファイルも `from __future__ import annotations` で始める。Enum は `TextEnum` を継ぎ、分岐の抜けは `_unreachable` で mypy に見つけさせる。ruff は py39、mypy は 3.10(3.9 を検査できない)で検査し、CI で 3.9 のテストも回す(0019)
+- mypy strict。コメントは書かず、経緯はコミットメッセージに書く
 - 公開リポジトリなので、README の見本、スクショ、テストに、実在の利用者のリポジトリ名、セッション ID、個人の情報を入れない(架空の `acme` を使う)。このリポジトリ自身の名前と、使った道具への出典のリンクは書いてよい

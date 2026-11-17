@@ -1,16 +1,18 @@
+from __future__ import annotations
+
 import json
 import os
 import sqlite3
 import subprocess
 from contextlib import closing
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from server import MAX_BODY_BYTES, ROOT, TriageStore, data_home, import_inbox, parse_report
 
-MORNING = datetime(2026, 11, 15, 9, 0, 0, 123456, tzinfo=UTC)
+MORNING = datetime(2026, 11, 15, 9, 0, 0, 123456, tzinfo=timezone.utc)
 NOON = MORNING + timedelta(hours=3)
 EVENING = MORNING + timedelta(hours=9)
 
