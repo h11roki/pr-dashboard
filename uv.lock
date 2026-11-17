@@ -268,11 +268,12 @@ name = "mypy"
 version = "2.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "ast-serialize", marker = "python_full_version >= '3.13'" },
-    { name = "librt", marker = "python_full_version >= '3.13' and platform_python_implementation != 'PyPy'" },
-    { name = "mypy-extensions", marker = "python_full_version >= '3.13'" },
-    { name = "pathspec", marker = "python_full_version >= '3.13'" },
-    { name = "typing-extensions", marker = "python_full_version >= '3.13'" },
+    { name = "ast-serialize", marker = "python_full_version >= '3.10'" },
+    { name = "librt", marker = "python_full_version >= '3.10' and platform_python_implementation != 'PyPy'" },
+    { name = "mypy-extensions", marker = "python_full_version >= '3.10'" },
+    { name = "pathspec", marker = "python_full_version >= '3.10'" },
+    { name = "tomli", marker = "python_full_version == '3.10.*'" },
+    { name = "typing-extensions", marker = "python_full_version >= '3.10'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/4a/3c/78ecece71ee4b5445389a4ccd11627cfb9c69e4de554d11060171f376305/mypy-2.4.1.tar.gz", hash = "sha256:63b590965691e540a335fa74dadf31a7069142f6b72e234689bbd244edf55623", size = 4066728, upload-time = "2026-10-28T19:23:13.286Z" }
 wheels = [
@@ -539,7 +540,7 @@ source = { virtual = "." }
 
 [package.dev-dependencies]
 dev = [
-    { name = "mypy", marker = "python_full_version >= '3.13'" },
+    { name = "mypy", marker = "python_full_version >= '3.10'" },
     { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pytest", version = "9.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "ruff" },
@@ -549,7 +550,7 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "mypy", marker = "python_full_version >= '3.13'", specifier = ">=2.4.1" },
+    { name = "mypy", marker = "python_full_version >= '3.10'", specifier = ">=2.4.1" },
     { name = "pytest", marker = "python_full_version < '3.10'", specifier = ">=8.4.2" },
     { name = "pytest", marker = "python_full_version >= '3.10'", specifier = ">=9.2.0" },
     { name = "ruff", specifier = ">=0.17.5" },

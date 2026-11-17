@@ -39,7 +39,7 @@
 ## 受け入れたトレードオフ
 
 - Python 3.9 は 2025 年 10 月にサポートが終わっている。Apple が macOS に入れ続けているあいだは、動かす先としていちばん確実なので使う
-- `match` 文や `StrEnum` を使えず、書き方が古くなる。`assert_never` の代わりに、引数を `NoReturn` にした関数で、Enum の値の抜けを mypy に見つけさせる。3.9 では、Enum に値で `in` を使うと TypeError になるので、`Agent(値)` が通るかで確かめる
+- `match` 文や `StrEnum` を使えず、書き方が古くなる。`StrEnum` の代わりに、`str` と `Enum` を継いで `str()` が値を返す `TextEnum` を使う(そうしないと 3.12 以降だけ `str()` や f 文字列が `Action.HOLD` になる)。`assert_never` の代わりに、引数を `NoReturn` にした関数で、Enum の値の抜けを mypy に見つけさせる。3.9 では、Enum に値で `in` を使うと TypeError になるので、`Agent(値)` が通るかで確かめる
 - mypy は 3.10 の標準ライブラリで検査するので、3.10 以降にしかない関数や引数(`zip(strict=)` など)を使っても見つからない。3.9 のテストが通らない道で使うと、3.9 で動かしたときに初めて分かる
 - `jq` が最初から入っているのは macOS 15 以降。それより前の macOS では、次の PR で送信スクリプトを Python にするまで `jq` を入れる必要がある
 - Windows は Python が最初から入っていないので、今までどおり対象にしない

@@ -15,6 +15,7 @@ from server import (
     HOST,
     MAX_REASON_LENGTH,
     Action,
+    Agent,
     DecisionError,
     DecisionRequest,
     ResumeFailed,
@@ -294,6 +295,10 @@ def test_lists_the_decisions_each_pr_can_take(
     [held] = store.list_triages()
 
     assert held.actions == (Action.REQUEST_REVIEW, Action.RETURN)
+
+
+def test_decisions_and_agents_read_as_their_values_in_text() -> None:
+    assert (str(Action.REQUEST_REVIEW), f"{Agent.CODEX}") == ("request-review", "codex")
 
 
 def test_a_decision_on_a_report_the_screen_has_not_seen_is_refused(

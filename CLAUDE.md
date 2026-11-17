@@ -46,6 +46,6 @@ Claude Code や Codex が作った PR の判断材料を受け取り、手元の
 
 - フェーズ: 1 受け取って表示する、2 Claude Code とつなぐ、3 判断をその場で実行する、4 使いながら足す
 - 新しい設計判断は先に ADR を書き、`docs/adr/README.md` の一覧を更新する
-- 動かすのは Python 3.9 以上、開発は 3.13。`match` 文、`StrEnum`、`assert_never`、`datetime.UTC`、型引数の構文、実行時に評価される `X | None` は使わず、どのファイルも `from __future__ import annotations` で始める。ruff は py39、mypy は 3.10(3.9 を検査できない)で検査し、CI で 3.9 のテストも回す(0019)
+- 動かすのは Python 3.9 以上、開発は 3.13。`match` 文、`StrEnum`、`assert_never`、`datetime.UTC`、型引数の構文、実行時に評価される `X | None` は使わず、どのファイルも `from __future__ import annotations` で始める。Enum は `TextEnum` を継ぎ、分岐の抜けは `_unreachable` で mypy に見つけさせる。ruff は py39、mypy は 3.10(3.9 を検査できない)で検査し、CI で 3.9 のテストも回す(0019)
 - mypy strict。コメントは書かず、経緯はコミットメッセージに書く
 - 公開リポジトリなので、README の見本、スクショ、テストに、実在の利用者のリポジトリ名、セッション ID、個人の情報を入れない(架空の `acme` を使う)。このリポジトリ自身の名前と、使った道具への出典のリンクは書いてよい

@@ -162,13 +162,17 @@ RunGh = Callable[[list[str], str, Optional[str]], None]
 FetchStates = Callable[[list[tuple[str, int, Optional[str]]]], dict[tuple[str, int], str]]
 
 
-class Action(str, Enum):
+class TextEnum(str, Enum):
+    __str__ = str.__str__
+
+
+class Action(TextEnum):
     REQUEST_REVIEW = "request-review"
     RETURN = "return"
     HOLD = "hold"
 
 
-class Agent(str, Enum):
+class Agent(TextEnum):
     CLAUDE = "claude"
     CODEX = "codex"
 
@@ -1089,9 +1093,10 @@ def check_stdin() -> None:
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == []:
+    arguments = sys.argv[1:]
+    if not arguments:
         main()
-    elif sys.argv[1:] == ["--check"]:
+    elif arguments == ["--check"]:
         check_stdin()
     else:
         sys.exit("使い方: python3 server.py [--check]")
