@@ -521,7 +521,7 @@ def test_does_not_resume_when_gh_is_not_logged_in_as_the_account(
     install_gh_logged_in_as(fake_agent.bin_dir, "acme-bot")
     logs = tmp_path / "returns"
 
-    with pytest.raises(GhFailed, match="acme-dev でログインしていない"):
+    with pytest.raises(GhFailed, match="acme-dev のトークンを取れなかった.終了コード 1"):
         resume_in_background(logs)(
             Session(id=SESSION_ID, workdir=str(workdir)), "直してください", "acme-dev"
         )

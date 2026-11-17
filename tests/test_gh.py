@@ -75,7 +75,7 @@ def test_does_not_run_gh_when_it_is_not_logged_in_as_the_account(
         f'echo "$*" > {received}',
     )
 
-    with pytest.raises(GhFailed, match="acme-bot でログインしていない"):
+    with pytest.raises(GhFailed, match="acme-bot のトークンを取れなかった.no oauth token found"):
         run_gh(["pr", "ready", "128", "-R", "acme/web"], "", "acme-bot")
 
     assert not received.exists()

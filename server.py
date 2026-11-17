@@ -558,7 +558,11 @@ def _token_of(account: str | None) -> str | None:
     completed = _gh(["auth", "token", "--user", account], "", None)
     token = completed.stdout.strip()
     if completed.returncode != 0 or not token:
-        raise GhFailed(f"gh に {account} でログインしていない。gh auth login で {account} を足す")
+        detail = completed.stderr.strip() or f"終了コード {completed.returncode}"
+        raise GhFailed(
+            f"gh で {account} のトークンを取れなかった({detail})。"
+            f"{account} で gh auth login しているか確かめる"
+        )
     return token
 
 

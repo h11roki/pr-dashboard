@@ -363,7 +363,9 @@ def test_still_checks_the_other_accounts_when_gh_is_not_logged_in_as_one(
     states = pull_request_states([("acme/web", 1, "acme-dev"), ("acme/api", 2, "acme-bot")])
 
     assert states == {("acme/api", 2): "MERGED"}
-    assert "acme-dev でログインしていない" in capsys.readouterr().err
+    assert "acme-dev のトークンを取れなかった(no oauth token found for acme-dev)" in (
+        capsys.readouterr().err
+    )
 
 
 def test_looks_up_the_token_of_an_account_once_for_all_its_queries(
