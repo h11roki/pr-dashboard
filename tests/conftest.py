@@ -3,7 +3,7 @@ import signal
 import socket
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import suppress
 from pathlib import Path
 
@@ -18,6 +18,7 @@ from server import (
     FetchStates,
     GhFailed,
     ResumeSession,
+    RunGh,
     Session,
     TriageStore,
 )
@@ -63,6 +64,7 @@ def report() -> dict[str, object]:
         "suggested_reviewers": [],
         "artifact_url": "https://claude.ai/artifact/example",
         "session": None,
+        "account": None,
     }
 
 
@@ -74,7 +76,7 @@ def store(tmp_path: Path) -> Iterator[TriageStore]:
 
 
 @pytest.fixture
-def gh_calls() -> list[tuple[list[str], str]]:
+def gh_calls() -> list[tuple[list[str], str, str | None]]:
     return []
 
 
@@ -85,10 +87,10 @@ def gh_failures() -> dict[str, str]:
 
 @pytest.fixture
 def recording_gh(
-    gh_calls: list[tuple[list[str], str]], gh_failures: dict[str, str]
-) -> Callable[[list[str], str], None]:
-    def run(arguments: list[str], stdin: str) -> None:
-        gh_calls.append((arguments, stdin))
+    gh_calls: list[tuple[list[str], str, str | None]], gh_failures: dict[str, str]
+) -> RunGh:
+    def run(arguments: list[str], stdin: str, account: str | None) -> None:
+        gh_calls.append((arguments, stdin, account))
         if arguments[1] in gh_failures:
             raise GhFailed(gh_failures[arguments[1]])
 
@@ -96,7 +98,7 @@ def recording_gh(
 
 
 @pytest.fixture
-def resumed() -> list[tuple[Session, str]]:
+def resumed() -> list[tuple[Session, str, str | None]]:
     return []
 
 
@@ -107,12 +109,12 @@ def resume_failures() -> list[DecisionError]:
 
 @pytest.fixture
 def recording_resume(
-    resumed: list[tuple[Session, str]], resume_failures: list[DecisionError]
+    resumed: list[tuple[Session, str, str | None]], resume_failures: list[DecisionError]
 ) -> ResumeSession:
-    def resume(session: Session, prompt: str) -> None:
+    def resume(session: Session, prompt: str, account: str | None) -> None:
         if resume_failures:
             raise resume_failures[0]
-        resumed.append((session, prompt))
+        resumed.append((session, prompt, account))
 
     return resume
 
@@ -123,7 +125,7 @@ def github_states() -> dict[tuple[str, int], str]:
 
 
 @pytest.fixture
-def state_requests() -> list[list[tuple[str, int]]]:
+def state_requests() -> list[list[tuple[str, int, str | None]]]:
     return []
 
 
@@ -135,14 +137,18 @@ def state_failures() -> list[GhFailed]:
 @pytest.fixture
 def recording_states(
     github_states: dict[tuple[str, int], str],
-    state_requests: list[list[tuple[str, int]]],
+    state_requests: list[list[tuple[str, int, str | None]]],
     state_failures: list[GhFailed],
 ) -> FetchStates:
-    def fetch(pull_requests: list[tuple[str, int]]) -> dict[tuple[str, int], str]:
+    def fetch(pull_requests: list[tuple[str, int, str | None]]) -> dict[tuple[str, int], str]:
         state_requests.append(pull_requests)
         if state_failures:
             raise state_failures[0]
-        return {found: github_states[found] for found in pull_requests if found in github_states}
+        return {
+            (repo, number): github_states[repo, number]
+            for repo, number, _ in pull_requests
+            if (repo, number) in github_states
+        }
 
     return fetch
 
@@ -150,7 +156,7 @@ def recording_states(
 @pytest.fixture
 def port(
     store: TriageStore,
-    recording_gh: Callable[[list[str], str], None],
+    recording_gh: RunGh,
     recording_resume: ResumeSession,
     recording_states: FetchStates,
 ) -> Iterator[int]:

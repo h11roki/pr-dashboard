@@ -15,6 +15,7 @@ from server import HOST, ROOT, Agent, Session, TriageStore, parse_report
 SCRIPT = ROOT / "bin" / "toriage-report"
 REFUSED = f"http://{HOST}:1"
 SESSION_ID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+ACCOUNT = "acme-bot"
 FACTS_FROM_GH = ("repo", "number", "url", "title", "branch", "changes")
 GH_PR_VIEW = {
     "number": 128,
@@ -46,10 +47,11 @@ def recorder(tmp_path: Path) -> str:
     )
 
 
-def write_commands(tmp_path: Path, gh_body: str) -> Path:
+def write_commands(tmp_path: Path, gh_body: str, login: str | None = ACCOUNT) -> Path:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    write_command(bin_dir, "gh", gh_body)
+    who = "exit 1" if login is None else f"echo {login}; exit 0"
+    write_command(bin_dir, "gh", f'if [ "$1 $2" = "api user" ]; then {who}; fi\n{gh_body}')
     write_command(bin_dir, "uname", "echo Linux")
     for name in NOTIFIERS:
         write_command(bin_dir, name, recorder(tmp_path))
@@ -128,7 +130,38 @@ def test_sends_the_judgment_with_the_facts_from_gh(
     assert result.returncode == 0, result.stderr
     assert "acme/web#128" in result.stdout
     [triage] = store.list_triages()
-    assert triage.report == report
+    assert triage.report == report | {"account": ACCOUNT}
+    assert triage.account == ACCOUNT
+
+
+def test_does_not_take_the_account_from_the_judgment(
+    tmp_path: Path, port: int, store: TriageStore, report: dict[str, object], fake_gh: Path
+) -> None:
+    judgment = judgment_of(report) | {"account": "someone-else"}
+
+    result = run_script(
+        fake_gh, json.dumps(judgment), f"http://{HOST}:{port}", tmp_path / "home", "128"
+    )
+
+    assert result.returncode == 0, result.stderr
+    [triage] = store.list_triages()
+    assert triage.account == ACCOUNT
+
+
+def test_sends_without_an_account_when_gh_cannot_tell_who_it_is(
+    tmp_path: Path, port: int, store: TriageStore, report: dict[str, object]
+) -> None:
+    bin_dir = write_commands(
+        tmp_path, f"echo '{json.dumps(GH_PR_VIEW, ensure_ascii=False)}'", login=None
+    )
+
+    result = run_script(
+        bin_dir, json.dumps(judgment_of(report)), f"http://{HOST}:{port}", tmp_path / "home", "128"
+    )
+
+    assert result.returncode == 0, result.stderr
+    [triage] = store.list_triages()
+    assert triage.account is None
 
 
 def checkout_of(tmp_path: Path, branch: str) -> Path:
@@ -389,7 +422,7 @@ def test_keeps_the_report_in_the_inbox_when_the_dashboard_is_down(
 
     assert result.returncode == 0, result.stderr
     saved = json.loads((inbox / "acme_web-128.json").read_text(encoding="utf-8"))
-    assert saved == report
+    assert saved == report | {"account": ACCOUNT}
 
 
 def test_starts_a_stopped_dashboard_before_sending(
@@ -403,7 +436,7 @@ def test_starts_a_stopped_dashboard_before_sending(
     assert "acme/web#128" in result.stdout
     with closing(TriageStore(dashboard_home / "prs.db")) as store:
         [triage] = store.list_triages()
-    assert triage.report == report
+    assert triage.report == report | {"account": ACCOUNT}
 
 
 def test_does_not_keep_an_invalid_report_even_when_the_dashboard_is_down(

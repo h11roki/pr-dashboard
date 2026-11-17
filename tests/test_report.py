@@ -23,6 +23,18 @@ def test_artifact_url_may_be_left_out(report: dict[str, object]) -> None:
     assert parse_report(report).artifact_url is None
 
 
+def test_keeps_the_account_that_reported_the_pr(report: dict[str, object]) -> None:
+    report["account"] = "acme-bot"
+
+    assert parse_report(report).account == "acme-bot"
+
+
+def test_account_may_be_left_out(report: dict[str, object]) -> None:
+    del report["account"]
+
+    assert parse_report(report).account is None
+
+
 def test_reads_a_session_without_an_agent_as_claude_code(report: dict[str, object]) -> None:
     report["session"] = {"id": SESSION_ID, "workdir": "/work/web"}
 
@@ -102,6 +114,10 @@ def test_rejects_a_missing_field(report: dict[str, object]) -> None:
         ("changes", {"files": 1, "additions": -1, "deletions": 0}, "additions"),
         ("changes", {"files": 1, "additions": 2**53 + 1, "deletions": 0}, "additions"),
         ("tests", {"status": "skipped", "detail": ""}, "status"),
+        ("account", "--user", "account"),
+        ("account", "acme/bot", "account"),
+        ("account", "a" * 40, "account"),
+        ("account", 7, "account"),
     ],
 )
 def test_rejects_an_invalid_field(

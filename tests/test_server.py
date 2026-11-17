@@ -1,7 +1,6 @@
 import json
 import socket
 import threading
-from collections.abc import Callable
 from datetime import UTC, datetime
 from http.client import HTTPConnection
 
@@ -16,6 +15,7 @@ from server import (
     FetchStates,
     GhFailed,
     ResumeSession,
+    RunGh,
     TriageStore,
     parse_report,
 )
@@ -159,7 +159,7 @@ def test_accepts_a_content_length_with_leading_zeros(port: int, report: dict[str
 
 def test_stops_serving_when_asked_to_shut_down(
     store: TriageStore,
-    recording_gh: Callable[[list[str], str], None],
+    recording_gh: RunGh,
     recording_resume: ResumeSession,
     recording_states: FetchStates,
 ) -> None:
@@ -237,7 +237,7 @@ def test_reports_a_failed_check_and_changes_nothing(
 
 
 def test_refuses_a_check_from_another_site(
-    port: int, state_requests: list[list[tuple[str, int]]]
+    port: int, state_requests: list[list[tuple[str, int, str | None]]]
 ) -> None:
     status, _ = send(
         port,
@@ -252,7 +252,7 @@ def test_refuses_a_check_from_another_site(
 
 
 def test_refuses_a_check_that_is_not_json(
-    port: int, state_requests: list[list[tuple[str, int]]]
+    port: int, state_requests: list[list[tuple[str, int, str | None]]]
 ) -> None:
     status, _ = send(port, "POST", "/api/prs/sync", b"{}", {"Content-Type": "text/plain"})
 
@@ -261,7 +261,7 @@ def test_refuses_a_check_that_is_not_json(
 
 
 def test_checks_again_without_waiting_after_a_new_report(
-    port: int, report: dict[str, object], state_requests: list[list[tuple[str, int]]]
+    port: int, report: dict[str, object], state_requests: list[list[tuple[str, int, str | None]]]
 ) -> None:
     post_report(port, report)
     send(port, "POST", "/api/prs/sync", *SYNC_REQUEST)
