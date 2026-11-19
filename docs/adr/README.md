@@ -46,7 +46,7 @@
 | [0005](0005-group-by-project.md) | PR はリポジトリごとにまとめて見せ、スイッチでまとめない表示に戻せるようにする | 承認 |
 | [0006](0006-report-script-failures.md) | 送信スクリプトは送る前にサーバーと同じ検証をし、届かなかったと分かるときだけ inbox に置く | 承認 |
 | [0007](0007-decision-buttons.md) | 判断のボタンはサーバーから gh を -R 付きで呼び、失敗したら判断の状態を変えない | 承認(差し戻しは 0011 で置き換え) |
-| [0008](0008-claude-code-plugin.md) | Claude Code のプラグインとして配り、Claude Code を開いたときにダッシュボードを起動する | 承認(GitHub のアカウントは 0018 で置き換え) |
+| [0008](0008-claude-code-plugin.md) | Claude Code のプラグインとして配り、Claude Code を開いたときにダッシュボードを起動する | 承認(GitHub のアカウントは 0018、起動のフックは 0020 で置き換え) |
 | [0009](0009-name-toriage.md) | 名前を toriage にする | 承認 |
 | [0010](0010-server-stops-itself.md) | 起動し直すときは、サーバーに自分で止まってもらう | 承認 |
 | [0011](0011-return-to-the-session.md) | 差し戻しは、PR を出した Claude のセッションを裏で再開して理由を渡す | 承認 |
@@ -57,3 +57,4 @@
 | [0016](0016-move-closed-prs.md) | マージや close をした PR は、画面を開いたときに GitHub で確かめて「済み」に移す | 承認 |
 | [0017](0017-notify-instead-of-opening.md) | 報告が届いたら、ページを開かずに OS の通知で知らせる | 承認 |
 | [0018](0018-act-as-the-reporting-account.md) | GitHub の操作は、報告を送ったセッションの gh のアカウントで行う | 承認 |
+| [0020](0020-no-session-start-hook.md) | Claude Code を開いたときにダッシュボードを起動するフックをやめる | 承認 |
