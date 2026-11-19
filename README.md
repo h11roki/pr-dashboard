@@ -35,10 +35,9 @@ toriage では、PR を作ったエージェント自身が「何を変えたか
   <img src="docs/images/architecture.png" alt="構成図。手元の PC で、あなたはブラウザでダッシュボードを読み、判断を toriage のサーバー(Python、127.0.0.1:8787)に送る。サーバーは報告と判断を SQLite に保存し、レビュー依頼のときは GitHub の PR を Ready にしてレビュアーを付ける。PR を作った Claude Code は toriage-report で判断材料を送り、toriage-report は POST /api/prs でサーバーに届ける。差し戻しのときは、サーバーが PR を作った Claude Code のセッションを再開して理由を渡す">
 </picture>
 
-1. Claude Code か Codex を開くと、フックがダッシュボードのサーバーを裏で起動します(Codex はフックを信頼してから)
-2. PR を作ったあと、Claude Code か Codex がスキル `toriage:report` に従って判断材料の JSON を書き、`toriage-report` で送ります。届くと、通知で知らせます
-3. 送る前に、サーバーと同じ検証を通します。ダッシュボードに届かなかったときは inbox に置き、次に起動したときに取り込みます
-4. 人がブラウザで判断すると、サーバーが反映します。レビュー依頼は `gh` で GitHub に、差し戻しは PR を作った Claude Code か Codex の会話を裏で再開して理由を渡します
+1. PR を作ったあと、Claude Code か Codex がスキル `toriage:report` に従って判断材料の JSON を書き、`toriage-report` で送ります。ダッシュボードのサーバーが動いていなければ、このとき裏で起動します。届くと、通知で知らせます
+2. 送る前に、サーバーと同じ検証を通します。ダッシュボードに届かなかったときは inbox に置き、次に起動したときに取り込みます
+3. 人がブラウザで判断すると、サーバーが反映します。レビュー依頼は `gh` で GitHub に、差し戻しは PR を作った Claude Code か Codex の会話を裏で再開して理由を渡します
 
 図は Claude Code の場合です。Codex でも同じ流れで動きます。[stack-diagram](https://github.com/caru-ini/stack-diagram) で描いた [`docs/images/architecture.html`](docs/images/architecture.html) を撮ったものです。
 
@@ -59,7 +58,7 @@ Claude Code で次の 2 つを実行します。
 /plugin install toriage@h11roki
 ```
 
-入れたあと Claude Code を開き直すと、ダッシュボードが起動します。`/toriage:open` で画面を開けます。
+ダッシュボードは、最初に報告を送ったときか、`/toriage:open` で画面を開いたときに起動します。Claude Code を開いただけでは起動しません。
 
 Codex では、ターミナルで次の 2 つを実行します。Codex は Claude Code のプラグインの形をそのまま読みます。
 
@@ -67,8 +66,6 @@ Codex では、ターミナルで次の 2 つを実行します。Codex は Clau
 codex plugin marketplace add h11roki/toriage
 codex plugin add toriage@h11roki
 ```
-
-Codex は、フックを確かめて信頼するまで、開いたときにダッシュボードを起動しません。信頼しなくても、報告を送るときに起動します。
 
 ## 使い方
 
